@@ -3,7 +3,7 @@
 
 EXTRA_DIST = main.dox
 
-SUBDIRS = replace acpp acbinutils
+SUBDIRS = replace acpp acadp acbinutils
 
 if HAVE_SYSTEMC
 SUBDIRS += powersc aclib acsim actsim accsim

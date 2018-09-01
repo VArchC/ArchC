@@ -192,6 +192,7 @@ AC_CONFIG_FILES(
   src/Makefile
   src/replace/Makefile
   src/acpp/Makefile
+  src/acadp/Makefile
   src/aclib/Makefile
   src/aclib/ac_core/Makefile
   src/aclib/ac_decoder/Makefile

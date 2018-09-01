@@ -27,6 +27,9 @@ Makefile
 src/acpp/archc_grammar.c
 src/acpp/archc_grammar.h
 src/acpp/archc_lex.c
+src/acadp/adele_grammar.c
+src/acadp/adele_grammar.h
+src/acadp/adele_lex.c
 src/accsim/eval.c
 src/accsim/eval.h
 
