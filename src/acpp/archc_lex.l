@@ -516,6 +516,13 @@ HEXA_DIGIT [0-9A-Fa-f]
   return AC_ISA;
  }
 
+<ARCH>"ac_adf" {
+  #if DEBUG_LEX
+  printf("ac_adf: %s\n", yytext);
+  #endif
+  return AC_ADF;
+}
+
 <ARCH>"ac_reg" {
   #if DEBUG_LEX
   printf("AC_REG: %s\n", yytext);

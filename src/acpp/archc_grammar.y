@@ -76,6 +76,7 @@ static int parse_error = 0;            //!< Indicates parse error occurred.
 char* project_name;                   //!< Name of the ArchC project being processed.
 char* upper_project_name;             //!< Name of the ArchC project being processed, converted to uppercase.
 char* isa_filename;                   //!< Name for the isa class file.
+char* adf_filename;                   //!< Name for the ADeLe Description File.
 char* helper_contents;                //!< Contents of the ac_helper declaration.
 int wordsize;                         //!< Size of the word type in bits for the current project.
 int fetchsize;                        //!< Size of the fetch word type in bits for the current project.
@@ -188,6 +189,7 @@ static void yywarn(const char* format, ...)
 %token <text> AC_PIPE
 %token <text> ARCH_CTOR
 %token <text> AC_ISA
+%token <text> AC_ADF
 %token <text> AC_WORDSIZE
 %token <text> AC_FETCHSIZE
 %token <text> SET_ENDIAN
@@ -1213,6 +1215,11 @@ archctordecbody: AC_ISA LPAREN STR RPAREN SEMICOLON archctordecbody
       {
        isa_filename = (char*) malloc(sizeof(char) * (strlen($3) + 1));
        strcpy(isa_filename ,$3);
+      }
+      | AC_ADF LPAREN STR RPAREN SEMICOLON archctordecbody
+      {
+        adf_filename = (char*) malloc(sizeof(char) * (strlen($3) + 1));
+        strcpy(adf_filename, $3);
       }
       | SET_ENDIAN LPAREN STR RPAREN SEMICOLON archctordecbody
       {
