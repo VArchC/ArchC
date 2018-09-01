@@ -38,10 +38,12 @@
  */
 
 #include "acsim.h"
+#include "acsim_varchc.h"
 #include "acpp.h"
 #include "stdlib.h"
 #include "string.h"
- #include <stdbool.h>
+#include <stdbool.h>
+#include <unistd.h>
 
 
 //#define DEBUG_STORAGE
@@ -223,7 +225,7 @@ void print_comment( FILE* output, char* description ){
 /*!Main routine of  ArchC pre-processor.*/
 //////////////////////////////////////////
 int main(int argc, char** argv) {
-  extern char *project_name, *isa_filename;
+  extern char *project_name, *isa_filename, *adf_filename;
   extern int wordsize;
   extern int fetchsize;
 
@@ -234,6 +236,7 @@ int main(int argc, char** argv) {
   // Structures to be passed to the simulator generator
   extern ac_stg_list *stage_list;
   extern ac_pipe_list *pipe_list;
+  extern int HaveADF;
   extern int HaveFormattedRegs;
   extern int HaveTLMIntrPorts;
 /***/
@@ -428,6 +431,23 @@ int main(int argc, char** argv) {
   if (error_flag)
     return EXIT_FAILURE;
 
+  if(adf_filename != NULL) {
+    HaveADF = 1;
+    AC_MSG("ADeLe: Parsing ADeLe Description File %s.\n", adf_filename);
+    if( !acadp_load(adf_filename) ) {
+      AC_ERROR("ADeLe: Could not open ADeLe Description File: %s.\n", adf_filename);
+      acadp_unload();
+      return EXIT_FAILURE;
+    }
+    else {
+      if( acadp_run() != 0) {
+        AC_ERROR("ADeLe: Parser terminated unsuccessfully.\n");
+        acadp_unload();
+        return EXIT_FAILURE;
+      }
+    }
+  }
+
   if( wordsize == 0){
     AC_MSG("Warning: No wordsize defined. Default value is 32 bits.\n");
     wordsize = 32;
@@ -480,12 +500,12 @@ int main(int argc, char** argv) {
   GetFirstLevelDataDevice();
 
   //Creating Resources Header File
-  CreateArchHeader();
-  CreateArchRefHeader();
+  CreateArchHeader(0);
+  CreateArchRefHeader(0);
 
   //Creating Resources Impl File
-  CreateArchImpl();
-  CreateArchRefImpl();
+  CreateArchImpl(0);
+  CreateArchRefImpl(0);
 
   //Creating ISA Header File
   CreateISAHeader();
@@ -501,8 +521,8 @@ int main(int argc, char** argv) {
     AC_MSG("Warning: pipe_list is no more used by acsim.\n");
 
   //Creating Processor Files
-  CreateProcessorHeader();
-  CreateProcessorImpl();
+  CreateProcessorHeader(0);
+  CreateProcessorImpl(0);
 
   //Creating Formatted Registers Header and Implementation Files.
   if( HaveFormattedRegs )
@@ -546,6 +566,10 @@ int main(int argc, char** argv) {
   /* Create the Makefile */
   CreateMakefile();
 
+  if(HaveADF) {
+    CreateVArchCFiles();
+  }
+
   //Issuing final messages to the user.
   AC_MSG("%s model files generated.\n", project_name);
 
@@ -560,19 +584,24 @@ int main(int argc, char** argv) {
 ////////////////////////////////////////////////////////////////////////////////////
 
 /*!Create ArchC Resources Header File */
-void CreateArchHeader() {
+void CreateArchHeader(int varchc_version) {
     extern ac_sto_list *storage_list;
     extern char *project_name;
     extern char *upper_project_name;
     extern int HaveFormattedRegs, HaveMemHier, HaveTLMPorts, HaveTLMIntrPorts,
-        HaveTLM2NBPorts, HaveTLM2Ports, HaveTLM2IntrPorts;
+        HaveTLM2NBPorts, HaveTLM2Ports, HaveTLM2IntrPorts, HaveADF;
 
     ac_sto_list *pstorage;
 
     FILE *output;
     char filename[256];
-
-    sprintf(filename, "%s_arch.H", project_name);
+ 
+    if (varchc_version) {
+      sprintf(filename, "%s_varchc_arch.H", project_name);
+    }
+    else {
+      sprintf(filename, "%s_arch.H", project_name);
+    }
 
     if (!(output = fopen(filename, "w"))) {
         perror("ArchC could not open output file");
@@ -580,15 +609,33 @@ void CreateArchHeader() {
     }
 
     print_comment(output, "ArchC Resources header file.");
-    fprintf(output, "#ifndef  %s_ARCH_H\n", upper_project_name);
-    fprintf(output, "#define  %s_ARCH_H\n\n", upper_project_name);
+    if (varchc_version) {
+      fprintf(output, "#ifndef  %s_VARCHC_ARCH_H\n", upper_project_name);
+      fprintf(output, "#define  %s_VARCHC_ARCH_H\n\n", upper_project_name);
+    }
+    else {
+      fprintf(output, "#ifndef  %s_ARCH_H\n", upper_project_name);
+      fprintf(output, "#define  %s_ARCH_H\n\n", upper_project_name);
+    }
 
     fprintf(output, "#include  \"%s_parms.H\"\n", project_name);
+    if (HaveADF) {
+      fprintf(output, "#include  \"%s_isa.H\"\n", project_name);
+    }
     fprintf(output, "#include  \"ac_arch_dec_if.H\"\n");
     fprintf(output, "#include  \"ac_mem.H\"\n");
     fprintf(output, "#include  \"ac_memport.H\"\n");
+    if (varchc_version) {
+      fprintf(output, "#include \"vac_memport.H\"\n");
+    }
     fprintf(output, "#include  \"ac_regbank.H\"\n");
+    if (varchc_version) {
+      fprintf(output, "#include \"vac_regbank.H\"\n");
+    }
     fprintf(output, "#include  \"ac_reg.H\"\n");
+    if (varchc_version) {
+      fprintf(output, "#include  \"vac_reg.H\"\n");
+    }
 
     if (HaveTLMPorts)
         fprintf(output, "#include  \"ac_tlm_port.H\"\n");
@@ -625,14 +672,50 @@ void CreateArchHeader() {
         fprintf(output, "#include \"ac_cache_if.H\"\n");
     }
 
+    /*VArchC Control*/
+    if (varchc_version) {
+      fprintf(output, "#include \"%s_varchc_control.H\"\n", project_name);
+    }
+
     // Declaring Architecture Resources class.
-    COMMENT(INDENT[0],
-            "ArchC class for model-specific architectural resources.\n");
-    fprintf(output, "class %s_arch : public ac_arch_dec_if<%s_parms::ac_word, "
-                    "%s_parms::ac_Hword> {\n",
-            project_name, project_name, project_name);
+    if (varchc_version) {
+      COMMENT(INDENT[0],
+              "VArchC class for model-specific architectural resources.\n");
+      fprintf(output, "namespace VArchC {\n");
+      fprintf(output, "class Arch_ref;\n");
+      fprintf(output, "class Arch : public ac_arch_dec_if<%s_parms::ac_word, "
+                      "%s_parms::ac_Hword> {\n",
+              project_name, project_name);
+    }
+    else {
+      COMMENT(INDENT[0],
+              "ArchC class for model-specific architectural resources.\n");
+      if (HaveADF) {
+        fprintf(output, "class %s_arch_ref;\n", project_name);
+      }
+      fprintf(output, "class %s_arch : public ac_arch_dec_if<%s_parms::ac_word, "
+                      "%s_parms::ac_Hword> {\n",
+              project_name, project_name, project_name);
+    }
 
     fprintf(output, "public:\n\n");
+    
+    if (HaveADF) {
+      COMMENT(INDENT[1], "Instruction Set.");
+      if (varchc_version) {
+        fprintf( output, "%s%s_parms::%s_isa<Arch, Arch_ref> ISA;\n\n",
+                 INDENT[1], project_name, project_name);
+      }
+      else {
+        fprintf( output, "%s%s_parms::%s_isa<%s_arch, %s_arch_ref> ISA;\n\n",
+                 INDENT[1], project_name, project_name, project_name, project_name);
+      }
+    }
+
+    if (varchc_version) {
+      COMMENT(INDENT[1], "VArchC Control.");
+      fprintf(output, "%sControl vac_control;\n\n", INDENT[1]);
+    }
 
     /* Declaring Program Counter */
     COMMENT(INDENT[1], "Program Counter.");
@@ -653,28 +736,58 @@ void CreateArchHeader() {
             } else {
                 switch ((unsigned)(pstorage->width)) {
                 case 0:
-                    fprintf(output, "%sac_reg<%s_parms::ac_word> %s;\n",
-                            INDENT[1], project_name, pstorage->name);
+                    if (varchc_version) {
+                      fprintf(output, "%sVArchC::Storage::Reg<%s_parms::ac_word> %s;\n", INDENT[1], project_name, pstorage->name);
+                    }
+                    else {
+                      fprintf(output, "%sac_reg<%s_parms::ac_word> %s;\n",
+                              INDENT[1], project_name, pstorage->name);
+                    }
                     break;
                 case 1:
-                    fprintf(output, "%sac_reg<bool> %s;\n", INDENT[1],
-                            pstorage->name);
+                    if (varchc_version) {
+                      fprintf(output, "%sVArchC::Storage::Reg<bool> %s;\n", INDENT[1], pstorage->name);
+                    }
+                    else {
+                      fprintf(output, "%sac_reg<bool> %s;\n", INDENT[1],
+                              pstorage->name);
+                    }
                     break;
                 case 8:
-                    fprintf(output, "%sac_reg<unsigned char> %s;\n", INDENT[1],
-                            pstorage->name);
+                    if (varchc_version) {
+                      fprintf(output, "%sVArchC::Storage::Reg<unsigned char> %s;\n", INDENT[1], pstorage->name);
+                    }
+                    else {
+                      fprintf(output, "%sac_reg<unsigned char> %s;\n", INDENT[1],
+                              pstorage->name);
+                    }
                     break;
                 case 16:
-                    fprintf(output, "%sac_reg<unsigned short> %s;\n", INDENT[1],
-                            pstorage->name);
+                    if (varchc_version) {
+                      fprintf(output, "%sVArchC::Storage::Reg<unsigned short> %s;\n", INDENT[1], pstorage->name);
+                    }
+                    else {
+                      fprintf(output, "%sac_reg<unsigned short> %s;\n", INDENT[1],
+                              pstorage->name);
+                    }
                     break;
                 case 32:
-                    fprintf(output, "%sac_reg<unsigned long> %s;\n", INDENT[1],
-                            pstorage->name);
+                    if (varchc_version) {
+                      fprintf(output, "%sVArchC::Storage::Reg<unsigned long> %s;\n", INDENT[1], pstorage->name);
+                    }
+                    else {
+                      fprintf(output, "%sac_reg<unsigned long> %s;\n", INDENT[1],
+                              pstorage->name);
+                    }
                     break;
                 case 64:
-                    fprintf(output, "%sac_reg<unsigned long long> %s;\n",
-                            INDENT[1], pstorage->name);
+                    if (varchc_version) {
+                      fprintf(output, "%sVArchC::Storage::Reg<unsigned long long> %s;\n", INDENT[1], pstorage->name);
+                    }
+                    else {
+                      fprintf(output, "%sac_reg<unsigned long long> %s;\n",
+                              INDENT[1], pstorage->name);
+                    }
                     break;
                 default:
                     AC_ERROR("Register width not supported: %d\n",
@@ -689,32 +802,70 @@ void CreateArchHeader() {
             // declared.
             switch ((unsigned)(pstorage->width)) {
             case 0:
-                fprintf(output, "%sac_regbank<%d, %s_parms::ac_word, "
-                                "%s_parms::ac_Dword> %s;\n",
-                        INDENT[1], pstorage->size, project_name, project_name,
-                        pstorage->name);
+                if (varchc_version) {
+                  fprintf(output, "%sVArchC::Storage::Regbank<%d, %s_parms::ac_word, "
+                                  "%s_parms::ac_Dword> %s;\n",
+                          INDENT[1], pstorage->size, project_name, project_name,
+                          pstorage->name);
+                }
+                else {
+                  fprintf(output, "%sac_regbank<%d, %s_parms::ac_word, "
+                                  "%s_parms::ac_Dword> %s;\n",
+                          INDENT[1], pstorage->size, project_name, project_name,
+                          pstorage->name);
+                }
                 break;
             case 8:
-                fprintf(output,
-                        "%sac_regbank<%d, unsigned char, unsigned char> %s;\n",
-                        INDENT[1], pstorage->size, pstorage->name);
+                if (varchc_version) {
+                  fprintf(output,
+                          "%sVArchC::Storage::Regbank<%d, unsigned char, unsigned char> %s;\n",
+                          INDENT[1], pstorage->size, pstorage->name);
+                }
+                else {
+                  fprintf(output,
+                          "%sac_regbank<%d, unsigned char, unsigned char> %s;\n",
+                          INDENT[1], pstorage->size, pstorage->name);
+                }
                 break;
             case 16:
-                fprintf(output,
-                        "%sac_regbank<%d, unsigned short, unsigned long> %s;\n",
-                        INDENT[1], pstorage->size, pstorage->name);
+                if (varchc_version) {
+                  fprintf(output,
+                          "%sVArchC::Storage::Regbank<%d, unsigned short, unsigned long> %s;\n",
+                          INDENT[1], pstorage->size, pstorage->name);
+                }
+                else {
+                  fprintf(output,
+                          "%sac_regbank<%d, unsigned short, unsigned long> %s;\n",
+                          INDENT[1], pstorage->size, pstorage->name);
+                }
                 break;
             case 32:
-                fprintf(
-                    output,
-                    "%sac_regbank<%d, unsigned long, unsigned long long> %s;\n",
-                    INDENT[1], pstorage->size, pstorage->name);
+                if (varchc_version) {
+                  fprintf(
+                      output,
+                      "%sVArchC::Storage::Regbank<%d, unsigned long, unsigned long long> %s;\n",
+                      INDENT[1], pstorage->size, pstorage->name);
+                }
+                else {
+                  fprintf(
+                      output,
+                      "%sac_regbank<%d, unsigned long, unsigned long long> %s;\n",
+                      INDENT[1], pstorage->size, pstorage->name);
+                }
                 break;
             case 64:
-                fprintf(
-                    output,
-                    "%sac_regbank<%d, unsigned long long, unsigned long> %s;\n",
-                    INDENT[1], pstorage->size, pstorage->name);
+                if (varchc_version) {
+                  fprintf(
+                      output,
+                      "%sVArchC::Storage::Regbank<%d, unsigned long long, unsigned long> %s;\n",
+                      INDENT[1], pstorage->size, pstorage->name);
+                }
+                else {
+                  fprintf(
+                      output,
+                      "%sac_regbank<%d, unsigned long long, unsigned long> %s;\n",
+                      INDENT[1], pstorage->size, pstorage->name);
+                }
                 break;
             default:
                 AC_ERROR("Register width not supported: %d\n", pstorage->width);
@@ -728,9 +879,16 @@ void CreateArchHeader() {
             if (!HaveMemHier) { // It is a generic cache. Just emit a base
                                 // container object.
                 fprintf(output, "%sac_mem %s;\n", INDENT[1], pstorage->name);
-                fprintf(output, "%sac_memport<%s_parms::ac_word, "
-                                "%s_parms::ac_Hword> %s_mport;\n",
-                        INDENT[1], project_name, project_name, pstorage->name);
+                if (varchc_version) {
+                  fprintf(output, "%sVArchC::Storage::Memport<%s_parms::ac_word, "
+                                  "%s_parms::ac_Hword> %s_mport;\n",
+                          INDENT[1], project_name, project_name, pstorage->name);
+                }
+                else {
+                  fprintf(output, "%sac_memport<%s_parms::ac_word, "
+                                  "%s_parms::ac_Hword> %s_mport;\n",
+                          INDENT[1], project_name, project_name, pstorage->name);
+                }
             } else {
                 // It is an ac_cache object.
                 ac_cache_parms *p = pstorage->parms;
@@ -745,47 +903,100 @@ void CreateArchHeader() {
                                 " %s_if;\n",
                         INDENT[1], project_name, project_name,
                         pstorage->class_declaration, pstorage->name);
-                fprintf(output,
-                        "%sac_memport<%s_parms::ac_word, %s_parms::ac_Hword> "
-                        "%s_mport;\n",
-                        INDENT[1], project_name, project_name, pstorage->name);
+                if (varchc_version) {
+                  fprintf(output,
+                          "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                          "%s_mport;\n",
+                          INDENT[1], project_name, project_name, pstorage->name);
+                }
+                else {
+                  fprintf(output,
+                          "%sac_memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                          "%s_mport;\n",
+                          INDENT[1], project_name, project_name, pstorage->name);
+                }
             }
             break;
 
         case MEM:
             fprintf(output, "%sac_mem %s;\n", INDENT[1], pstorage->name);
-            fprintf(output, "%sac_memport<%s_parms::ac_word, "
-                            "%s_parms::ac_Hword> %s_mport;\n",
-                    INDENT[1], project_name, project_name, pstorage->name);
+            if (varchc_version) {
+              fprintf(output,
+                      "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                      "%s_mport;\n",
+                      INDENT[1], project_name, project_name, pstorage->name);
+            }
+            else {
+              fprintf(output,
+                      "%sac_memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                      "%s_mport;\n",
+                      INDENT[1], project_name, project_name, pstorage->name);
+            }
             break;
 
         case TLM_PORT:
             fprintf(output, "%sac_tlm_port %s;\n", INDENT[1], pstorage->name);
-            fprintf(output, "%sac_memport<%s_parms::ac_word, "
-                            "%s_parms::ac_Hword> %s_mport;\n",
-                    INDENT[1], project_name, project_name, pstorage->name);
+            if (varchc_version) {
+              fprintf(output,
+                      "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                      "%s_mport;\n",
+                      INDENT[1], project_name, project_name, pstorage->name);
+            }
+            else {
+              fprintf(output,
+                      "%sac_memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                      "%s_mport;\n",
+                      INDENT[1], project_name, project_name, pstorage->name);
+            }
             break;
 
         case TLM2_PORT:
             fprintf(output, "%sac_tlm2_port %s;\n", INDENT[1], pstorage->name);
-            fprintf(output, "%sac_memport<%s_parms::ac_word, "
-                            "%s_parms::ac_Hword> %s_mport;\n",
-                    INDENT[1], project_name, project_name, pstorage->name);
+            if (varchc_version) {
+              fprintf(output,
+                      "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                      "%s_mport;\n",
+                      INDENT[1], project_name, project_name, pstorage->name);
+            }
+            else {
+              fprintf(output,
+                      "%sac_memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                      "%s_mport;\n",
+                      INDENT[1], project_name, project_name, pstorage->name);
+            }
             break;
 
         case TLM2_NB_PORT:
             fprintf(output, "%sac_tlm2_nb_port %s;\n", INDENT[1],
                     pstorage->name);
-            fprintf(output, "%sac_memport<%s_parms::ac_word, "
-                            "%s_parms::ac_Hword> %s_mport;\n",
-                    INDENT[1], project_name, project_name, pstorage->name);
+            if (varchc_version) {
+              fprintf(output,
+                      "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                      "%s_mport;\n",
+                      INDENT[1], project_name, project_name, pstorage->name);
+            }
+            else {
+              fprintf(output,
+                      "%sac_memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                      "%s_mport;\n",
+                      INDENT[1], project_name, project_name, pstorage->name);
+            }
             break;
 
         default:
             fprintf(output, "%sac_mem %s;\n", INDENT[1], pstorage->name);
-            fprintf(output, "%sac_memport<%s_parms::ac_word, "
-                            "%s_parms::ac_Hword> %s_mport;\n",
-                    INDENT[1], project_name, project_name, pstorage->name);
+            if (varchc_version) {
+              fprintf(output,
+                      "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                      "%s_mport;\n",
+                      INDENT[1], project_name, project_name, pstorage->name);
+            }
+            else {
+              fprintf(output,
+                      "%sac_memport<%s_parms::ac_word, %s_parms::ac_Hword> "
+                      "%s_mport;\n",
+                      INDENT[1], project_name, project_name, pstorage->name);
+            }
             break;
         }
     }
@@ -798,9 +1009,20 @@ void CreateArchHeader() {
 
     fprintf(output, "\n\n");
 
+    if (varchc_version) {
+      COMMENT(INDENT[1], "VArchC-only MemPorts.");
+      fprintf(output, "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword>* INST_PORT;\n", INDENT[1], project_name, project_name);
+      fprintf(output, "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword>* DATA_PORT;\n\n", INDENT[1], project_name, project_name);
+    }
+
     // ac_resources constructor declaration
     COMMENT(INDENT[1], "Constructor.");
-    fprintf(output, "%sexplicit %s_arch();\n\n", INDENT[1], project_name);
+    if (varchc_version) {
+      fprintf(output, "%sexplicit Arch();\n\n", INDENT[1]);
+    }
+    else {
+      fprintf(output, "%sexplicit %s_arch();\n\n", INDENT[1], project_name);
+    }
 
     COMMENT(INDENT[1], "Module initialization method.");
     fprintf(output, "%svirtual void init(int ac, char* av[]) = 0;\n\n",
@@ -817,30 +1039,50 @@ void CreateArchHeader() {
     }
 
     COMMENT(INDENT[1], "Virtual destructor declaration.");
-    fprintf(output, "%svirtual ~%s_arch() {};\n\n", INDENT[1], project_name);
+    if (varchc_version) {
+      fprintf(output, "%svirtual ~Arch() {};\n\n", INDENT[1]);
+    }
+    else {
+      fprintf(output, "%svirtual ~%s_arch() {};\n\n", INDENT[1], project_name);
+    }
 
     fprintf(output, "%sstatic int globalId;\n", INDENT[1]);
     fprintf(output, "%sint getId() { return ac_id.read(); }\n", INDENT[1]);
 
-    fprintf(output, "};\n\n"); // End of ac_resources class
+    if (varchc_version) {
+      fprintf(output, "};\n}\n\n"); // End of ac_resources class
+    }
+    else {
+      fprintf(output, "};\n\n"); // End of ac_resources class
+    }
 
-    fprintf(output, "#endif  //_%s_ARCH_H\n", upper_project_name);
+    if (varchc_version) {
+      fprintf(output, "#endif  //_%s_VARCHC_ARCH_H\n", upper_project_name);
+    }
+    else {
+      fprintf(output, "#endif  //_%s_ARCH_H\n", upper_project_name);
+    }
     fclose(output);
 }
 
 /*!Create ArchC Resources Reference Header File */
-void CreateArchRefHeader() {
+void CreateArchRefHeader(int varchc_version) {
     extern ac_sto_list *storage_list;
     extern char* project_name;
     extern char* upper_project_name;
-    extern int HaveFormattedRegs, HaveMemHier, HaveTLMIntrPorts, HaveTLM2IntrPorts;
+    extern int HaveFormattedRegs, HaveMemHier, HaveTLMIntrPorts, HaveTLM2IntrPorts, HaveADF;
 
     ac_sto_list *pstorage;
 
     FILE *output;
     char filename[256];
 
-    sprintf(filename, "%s_arch_ref.H", project_name);
+    if (varchc_version) {
+      sprintf(filename, "%s_varchc_arch_ref.H", project_name);
+    }
+    else {
+      sprintf(filename, "%s_arch_ref.H", project_name);
+    }
 
     if ( !(output = fopen( filename, "w"))){
         perror("ArchC could not open output file");
@@ -848,14 +1090,29 @@ void CreateArchRefHeader() {
     }
 
     print_comment( output, "ArchC Resources header file.");
-    fprintf( output, "#ifndef  _%s_ARCH_REF_H\n", upper_project_name);
-    fprintf( output, "#define  _%s_ARCH_REF_H\n\n", upper_project_name);
+    if (varchc_version) {
+      fprintf( output, "#ifndef  _%s_VARCHC_ARCH_REF_H\n", upper_project_name);
+      fprintf( output, "#define  _%s_VARCHC_ARCH_REF_H\n\n", upper_project_name);
+    }
+    else {
+      fprintf( output, "#ifndef  _%s_ARCH_REF_H\n", upper_project_name);
+      fprintf( output, "#define  _%s_ARCH_REF_H\n\n", upper_project_name);
+    }
 
     fprintf( output, "#include  \"%s_parms.H\"\n", project_name);
     fprintf( output, "#include  \"ac_arch_ref.H\"\n");
     fprintf( output, "#include  \"ac_memport.H\"\n");
+    if (varchc_version) {
+      fprintf(output, "#include \"vac_memport.H\"\n");
+    }
     fprintf( output, "#include  \"ac_reg.H\"\n");
+    if (varchc_version) {
+      fprintf( output, "#include  \"vac_reg.H\"\n");
+    }
     fprintf( output, "#include  \"ac_regbank.H\"\n");
+    if (varchc_version) {
+      fprintf(output, "#include \"vac_regbank.H\"\n");
+    }
 
     if (HaveTLMIntrPorts)
         fprintf(output, "#include  \"ac_tlm_intr_port.H\"\n");
@@ -876,14 +1133,33 @@ void CreateArchRefHeader() {
         fprintf(output, "#include \"ac_lru_replacement_policy.H\"\n");
     }
 
-
-
     COMMENT(INDENT[0], "Forward class declaration, needed to compile.");
-    fprintf(output, "class %s_arch;\n\n", project_name);
+    if (varchc_version) {
+      fprintf(output, "namespace VArchC {\n");
+      fprintf(output, "%sclass Arch;\n", INDENT[1]);
+      fprintf(output, "%sclass Control;\n", INDENT[1]);
+      fprintf(output, "}\n");
+      fprintf(output, "using namespace VArchC::Storage;\n\n");
+    }
+    else {
+      fprintf(output, "class %s_arch;\n\n", project_name);
+    }
+    if (HaveADF) {
+      fprintf( output, "namespace %s_parms {\n", project_name);
+      fprintf( output, "%stemplate <class A, class Ar> class %s_isa;\n", INDENT[1], project_name);
+      fprintf( output, "}\n");
+    }
 
     //Declaring Architecture Resource references class.
-    COMMENT(INDENT[0],"ArchC class for model-specific architectural resources.");
-    fprintf( output, "class %s_arch_ref : public ac_arch_ref<%s_parms::ac_word, %s_parms::ac_Hword> {\n", project_name, project_name, project_name);
+    if (varchc_version) {
+      COMMENT(INDENT[0],"VArchC class for model-specific architectural resources.");
+      fprintf(output, "namespace VArchC {\n");
+      fprintf( output, "class Arch_ref : public ac_arch_ref<%s_parms::ac_word, %s_parms::ac_Hword> {\n", project_name, project_name);
+    }
+    else {
+      COMMENT(INDENT[0],"ArchC class for model-specific architectural resources.");
+      fprintf( output, "class %s_arch_ref : public ac_arch_ref<%s_parms::ac_word, %s_parms::ac_Hword> {\n", project_name, project_name, project_name);
+    }
     fprintf( output, "public:\n");
     fprintf( output, " \n");
 
@@ -905,67 +1181,132 @@ void CreateArchRefHeader() {
                     fprintf( output, "%s%s_fmt_%s& %s;\n", INDENT[1], project_name, pstorage->name, pstorage->name);
                 }
                 else{
-                    switch((unsigned)(pstorage->width)) {
-                        case 0:
-                            fprintf( output, "%sac_reg<%s_parms::ac_word>& %s;\n",
-                                    INDENT[1], project_name, pstorage->name);
-                            break;
-                        case 1:
-                            fprintf( output, "%sac_reg<bool>& %s;\n",
-                                    INDENT[1], pstorage->name);
-                            break;
-                        case 8:
-                            fprintf( output, "%sac_reg<unsigned char>& %s;\n",
-                                    INDENT[1], pstorage->name);
-                            break;
-                        case 16:
-                            fprintf( output, "%sac_reg<unsigned short>& %s;\n",
-                                    INDENT[1], pstorage->name);
-                            break;
-                        case 32:
-                            fprintf( output, "%sac_reg<unsigned long>& %s;\n",
-                                    INDENT[1], pstorage->name);
-                            break;
-                        case 64:
-                            fprintf( output, "%sac_reg<unsigned long long>& %s;\n",
-                                    INDENT[1], pstorage->name);
-                            break;
-                        default:
-                            AC_ERROR("Register width not supported: %d\n",
-                                    pstorage->width);
-                            break;
-                    }
+                  switch ((unsigned)(pstorage->width)) {
+                  case 0:
+                      if (varchc_version) {
+                        fprintf(output, "%sVArchC::Storage::Reg<%s_parms::ac_word>& %s;\n", INDENT[1], project_name, pstorage->name);
+                      }
+                      else {
+                        fprintf(output, "%sac_reg<%s_parms::ac_word>& %s;\n",
+                                INDENT[1], project_name, pstorage->name);
+                      }
+                      break;
+                  case 1:
+                      if (varchc_version) {
+                        fprintf(output, "%sVArchC::Storage::Reg<bool>& %s;\n", INDENT[1], pstorage->name);
+                      }
+                      else {
+                        fprintf(output, "%sac_reg<bool>& %s;\n", INDENT[1],
+                                pstorage->name);
+                      }
+                      break;
+                  case 8:
+                      if (varchc_version) {
+                        fprintf(output, "%sVArchC::Storage::Reg<unsigned char>& %s;\n", INDENT[1], pstorage->name);
+                      }
+                      else {
+                        fprintf(output, "%sac_reg<unsigned char>& %s;\n", INDENT[1],
+                                pstorage->name);
+                      }
+                      break;
+                  case 16:
+                      if (varchc_version) {
+                        fprintf(output, "%sVArchC::Storage::Reg<unsigned short>& %s;\n", INDENT[1], pstorage->name);
+                      }
+                      else {
+                        fprintf(output, "%sac_reg<unsigned long>& %s;\n", INDENT[1],
+                                pstorage->name);
+                      }
+                      break;
+                  case 64:
+                      if (varchc_version) {
+                        fprintf(output, "%sVArchC::Storage::Reg<unsigned long long>& %s;\n", INDENT[1], pstorage->name);
+                      }
+                      else {
+                        fprintf(output, "%sac_reg<unsigned long long>& %s;\n",
+                                INDENT[1], pstorage->name);
+                      }
+                      break;
+                  default:
+                      AC_ERROR("Register width not supported: %d\n",
+                               pstorage->width);
+                      break;
+                  }
                 }
                 break;
 
             case REGBANK:
                 //Emitting register bank. Checking is a register width was declared.
-                switch((unsigned)(pstorage->width)) {
-                    case 0:
-                        fprintf( output, "%sac_regbank<%d, %s_parms::ac_word, %s_parms::ac_Dword>& %s;\n",
-                                INDENT[1], pstorage->size, project_name,
-                                project_name, pstorage->name);
-                        break;
-                    case 8:
-                        fprintf( output, "%sac_regbank<%d, unsigned char, unsigned char>& %s;\n",
-                                INDENT[1], pstorage->size, pstorage->name);
-                        break;
-                    case 16:
-                        fprintf( output, "%sac_regbank<%d, unsigned short, unsigned long>& %s;\n",
-                                INDENT[1], pstorage->size, pstorage->name);
-                        break;
-                    case 32:
-                        fprintf( output, "%sac_regbank<%d, unsigned long, unsigned long long>& %s;\n",
-                                INDENT[1], pstorage->size, pstorage->name);
-                        break;
-                    case 64:
-                        fprintf( output, "%sac_regbank<%d, unsigned long long, unsigned long long>& %s;\n",
-                                INDENT[1], pstorage->size, pstorage->name);
-                        break;
-                    default:
-                        AC_ERROR("Register width not supported: %d\n",
-                                pstorage->width);
-                        break;
+                switch ((unsigned)(pstorage->width)) {
+                case 0:
+                    if (varchc_version) {
+                      fprintf(output, "%sVArchC::Storage::Regbank<%d, %s_parms::ac_word, "
+                                      "%s_parms::ac_Dword>& %s;\n",
+                              INDENT[1], pstorage->size, project_name, project_name,
+                              pstorage->name);
+                    }
+                    else {
+                      fprintf(output, "%sac_regbank<%d, %s_parms::ac_word, "
+                                      "%s_parms::ac_Dword>& %s;\n",
+                              INDENT[1], pstorage->size, project_name, project_name,
+                              pstorage->name);
+                    }
+                    break;
+                case 8:
+                    if (varchc_version) {
+                      fprintf(output,
+                              "%sVArchC::Storage::Regbank<%d, unsigned char, unsigned char>& %s;\n",
+                              INDENT[1], pstorage->size, pstorage->name);
+                    }
+                    else {
+                      fprintf(output,
+                              "%sac_regbank<%d, unsigned char, unsigned char>& %s;\n",
+                              INDENT[1], pstorage->size, pstorage->name);
+                    }
+                    break;
+                case 16:
+                    if (varchc_version) {
+                      fprintf(output,
+                              "%sVArchC::Storage::Regbank<%d, unsigned short, unsigned long>& %s;\n",
+                              INDENT[1], pstorage->size, pstorage->name);
+                    }
+                    else {
+                      fprintf(output,
+                              "%sac_regbank<%d, unsigned short, unsigned long>& %s;\n",
+                              INDENT[1], pstorage->size, pstorage->name);
+                    }
+                    break;
+                case 32:
+                    if (varchc_version) {
+                      fprintf(
+                          output,
+                          "%sVArchC::Storage::Regbank<%d, unsigned long, unsigned long long>& %s;\n",
+                          INDENT[1], pstorage->size, pstorage->name);
+                    }
+                    else {
+                      fprintf(
+                          output,
+                          "%sac_regbank<%d, unsigned long, unsigned long long>& %s;\n",
+                          INDENT[1], pstorage->size, pstorage->name);
+                    }
+                    break;
+                case 64:
+                    if (varchc_version) {
+                      fprintf(
+                          output,
+                          "%sVArchC::Storage::Regbank<%d, unsigned long long, unsigned long>& %s;\n",
+                          INDENT[1], pstorage->size, pstorage->name);
+                    }
+                    else {
+                      fprintf(
+                          output,
+                          "%sac_regbank<%d, unsigned long long, unsigned long>& %s;\n",
+                          INDENT[1], pstorage->size, pstorage->name);
+                    }
+                    break;
+                default:
+                    AC_ERROR("Register width not supported: %d\n", pstorage->width);
+                    break;
                 }
                 break;
 
@@ -973,11 +1314,21 @@ void CreateArchRefHeader() {
             case ICACHE:
             case DCACHE:
             case MEM:
-                fprintf(output, "%sac_memport<%s_parms::ac_word, %s_parms::ac_Hword>& %s;\n", INDENT[1], project_name, project_name, pstorage->name);
+                if (varchc_version) {
+                  fprintf(output, "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword>& %s;\n", INDENT[1], project_name, project_name, pstorage->name);
+                }
+                else {
+                  fprintf(output, "%sac_memport<%s_parms::ac_word, %s_parms::ac_Hword>& %s;\n", INDENT[1], project_name, project_name, pstorage->name);
+                }
                 break;
 
             default:
-                fprintf( output, "%sac_memport<%s_parms::ac_word, %s_parms::ac_Hword>& %s;\n", INDENT[1], project_name, project_name, pstorage->name);
+                if (varchc_version) {
+                  fprintf(output, "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword>& %s;\n", INDENT[1], project_name, project_name, pstorage->name);
+                }
+                else {
+                  fprintf(output, "%sac_memport<%s_parms::ac_word, %s_parms::ac_Hword>& %s;\n", INDENT[1], project_name, project_name, pstorage->name);
+                }
                 break;
         }
     }
@@ -986,29 +1337,75 @@ void CreateArchRefHeader() {
         fprintf( output, "%sac_reg<%s_parms::ac_word>& intr_reg;\n",INDENT[1], project_name);
 
     fprintf(output, "\n");
+    
+    if (HaveADF) {
+      COMMENT(INDENT[1], "Instruction Set.");
+      if (varchc_version) {
+        fprintf( output, "%s%s_parms::%s_isa<Arch, Arch_ref>& ISA;\n\n",
+                 INDENT[1], project_name, project_name);
+      }
+      else {
+        fprintf( output, "%s%s_parms::%s_isa<%s_arch, %s_arch_ref>& ISA;\n\n",
+                 INDENT[1], project_name, project_name, project_name, project_name);
+      }
+    }
+
+    if (varchc_version) {
+      fprintf(output, "%sControl& vac_control;\n\n", INDENT[1]);
+      fprintf(output, "%sOPList& OP;\n\n", INDENT[1]);
+      COMMENT(INDENT[1], "VArchC-only MemPorts.");
+      fprintf(output, "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword>*& INST_PORT;\n", INDENT[1], project_name, project_name);
+      fprintf(output, "%sVArchC::Storage::Memport<%s_parms::ac_word, %s_parms::ac_Hword>*& DATA_PORT;\n\n", INDENT[1], project_name, project_name);
+    }
 
     //ac_resources constructor declaration
     COMMENT(INDENT[1],"Constructor.");
-    fprintf(output, "%s %s_arch_ref(%s_arch& arch);\n", INDENT[1], project_name, project_name);
+    if (varchc_version) {
+      fprintf(output, "%sArch_ref(Arch& arch);\n", INDENT[1]);
+    }
+    else {
+      fprintf(output, "%s %s_arch_ref(%s_arch& arch);\n", INDENT[1], project_name, project_name);
+    }
     fprintf( output, "\n");
-    fprintf( output, "};\n\n"); //End of _arch_ref class
-    fprintf( output, "#endif  //_%s_ARCH_REF_H\n", upper_project_name);
+
+    if (HaveADF) {
+      fprintf(output, "%svoid vac_issue(unsigned int cmd);\n", INDENT[1]);
+    }
+
+    if (varchc_version) {
+      fprintf( output, "};\n}\n\n"); //End of _arch_ref class
+    }
+    else {
+      fprintf( output, "};\n\n"); //End of _arch_ref class
+    }
+
+    if (varchc_version) {
+      fprintf( output, "#endif  //_%s_VARCHC_ARCH_REF_H\n", upper_project_name);
+    }
+    else {
+      fprintf( output, "#endif  //_%s_ARCH_REF_H\n", upper_project_name);
+    }
     fclose( output);
 }
 
 
 /*!Create ArchC Resources Reference Implementation File */
-void CreateArchRefImpl() {
+void CreateArchRefImpl(int varchc_version) {
     extern ac_sto_list *storage_list;
     extern char* project_name;
-    extern int HaveFormattedRegs, HaveMemHier;
+    extern int HaveFormattedRegs, HaveMemHier, HaveADF;
 
     ac_sto_list *pstorage;
 
     FILE *output;
     char filename[256];
 
-    sprintf(filename, "%s_arch_ref.cpp", project_name);
+    if (varchc_version) {
+      sprintf(filename, "%s_varchc_arch_ref.cpp", project_name);
+    }
+    else {
+      sprintf(filename, "%s_arch_ref.cpp", project_name);
+    }
 
     if ( !(output = fopen( filename, "w"))){
         perror("ArchC could not open output file");
@@ -1017,13 +1414,31 @@ void CreateArchRefImpl() {
 
     print_comment( output, "ArchC Resources implementation file.");
 
-    fprintf( output, "#include  \"%s_arch.H\"\n", project_name);
-    fprintf( output, "#include  \"%s_arch_ref.H\"\n\n", project_name);
+    if (HaveADF) {
+      if (varchc_version) {
+        fprintf( output, "#include  \"%s_varchc_arch_ref.H\"\n\n", project_name);
+        fprintf( output, "#include  \"%s_varchc_arch.H\"\n", project_name);
+      }
+      else {
+        fprintf( output, "#include  \"%s_arch_ref.H\"\n\n", project_name);
+        fprintf( output, "#include  \"%s_arch.H\"\n", project_name);
+      }
+    }
+    else {
+      fprintf( output, "#include  \"%s_arch.H\"\n", project_name);
+      fprintf( output, "#include  \"%s_arch_ref.H\"\n\n", project_name);
+    }
 
     //Declaring Architecture Resource references class.
     COMMENT(INDENT[0],"/Default constructor.");
-    fprintf(output, "%s_arch_ref::%s_arch_ref(%s_arch& arch) : ac_arch_ref<%s_parms::ac_word, %s_parms::ac_Hword>(arch),\n",
-            project_name, project_name, project_name, project_name, project_name);
+    if (varchc_version) {
+      fprintf(output, "VArchC::Arch_ref::Arch_ref(VArchC::Arch& arch) : ac_arch_ref<%s_parms::ac_word, %s_parms::ac_Hword>(arch),\n",
+              project_name, project_name);
+    }
+    else {
+      fprintf(output, "%s_arch_ref::%s_arch_ref(%s_arch& arch) : ac_arch_ref<%s_parms::ac_word, %s_parms::ac_Hword>(arch),\n",
+              project_name, project_name, project_name, project_name, project_name);
+    }
 
     fprintf(output, "%sac_pc(arch.ac_pc), ac_id(arch.ac_id),\n", INDENT[1]);
 
@@ -1040,9 +1455,29 @@ void CreateArchRefImpl() {
     }
 
     if (HaveTLMIntrPorts || HaveTLM2IntrPorts)
-        fprintf(output, ", intr_reg(arch.intr_reg) ");
+        fprintf(output, ", intr_reg(arch.intr_reg)");
+
+    if (HaveADF) {
+      fprintf(output, ", ISA(arch.ISA)");
+      if (varchc_version) {
+        fprintf(output, ", vac_control(arch.vac_control)");
+        fprintf(output, ", OP(arch.vac_control.OP)");
+        fprintf(output, ", INST_PORT(arch.INST_PORT)");
+        fprintf(output, ", DATA_PORT(arch.DATA_PORT)");
+      }
+    }
 
     fprintf(output, " {}\n\n");
+
+    if (HaveADF) {
+      if (varchc_version) {
+        fprintf(output, "void VArchC::Arch_ref::vac_issue(unsigned int cmd) {this->vac_control.issue(cmd);}\n\n");
+      }
+      else {
+        fprintf(output, "void %s_arch_ref::vac_issue(unsigned int cmd) {}\n\n", project_name);
+      }
+    }
+
     fclose( output);
 
 }
@@ -1233,6 +1668,7 @@ void CreateISAHeader() {
   extern ac_dec_instr *instr_list;
   extern int wordsize;
   extern ac_dec_field *common_instr_field_list;
+  extern int HaveADF;
   ac_grp_list* pgroup;
   ac_dec_format *pformat;
   ac_dec_instr *pinstr;
@@ -1258,18 +1694,32 @@ void CreateISAHeader() {
   fprintf( output, "#include \"ac_instr.H\"\n");
   fprintf( output, "#include \"ac_decoder_rt.H\"\n");
   fprintf( output, "#include \"ac_instr_info.H\"\n");
-  fprintf( output, "#include \"%s_arch.H\"\n", project_name);
   fprintf( output, "#include \"%s_arch_ref.H\"\n", project_name);
+  if (HaveADF) {
+    fprintf( output, "#include \"%s_varchc_arch_ref.H\"\n", project_name);
+  }
   if (ACABIFlag)
     fprintf( output, "#include \"%s_syscall.H\"\n", project_name);
   if (ACStatsFlag)
     fprintf(output, "#include \"%s_stats.H\"\n", project_name);
   fprintf( output, "\n");
 
+  if (HaveADF) {
+    fprintf(output, "class %s_arch;\n", project_name);
+    fprintf(output, "namespace VArchC {\n");
+    fprintf(output, "%sclass Arch;\n", INDENT[1]);
+    fprintf(output, "}\n\n");
+  }
 
   fprintf(output, "namespace %s_parms\n{\n", project_name);
-  fprintf(output, "class %s_isa: public %s_arch_ref", project_name,
-          project_name);
+  if (HaveADF) {
+    fprintf(output, "template<class A, class Ar>\n");
+    fprintf(output, "class %s_isa: public Ar", project_name);
+  }
+  else {
+    fprintf(output, "class %s_isa: public %s_arch_ref", project_name,
+            project_name);
+  }
   if (ACStatsFlag)
     fprintf(output, ", public %s_all_stats", project_name);
   fprintf(output, " {\n");
@@ -1282,6 +1732,11 @@ void CreateISAHeader() {
   fprintf(output, "\n");
 
   fprintf(output, "public:\n");
+  
+  if (HaveADF) {
+    EmitArchUsingDirectives(output, "Ar", 1, 0);
+  }
+
   fprintf(output, "%sstatic ac_dec_field fields[AC_DEC_FIELD_NUMBER];\n",
           INDENT[1]);
   fprintf(output, "%sstatic ac_dec_format formats[AC_DEC_FORMAT_NUMBER];\n",
@@ -1296,8 +1751,14 @@ void CreateISAHeader() {
           INDENT[1]);
 
   fprintf( output, "%sac_decoder_full* decoder;\n\n", INDENT[1]);
-  if (ACABIFlag)
-    fprintf( output, "%s%s_syscall syscall;\n", INDENT[1], project_name );
+  if (ACABIFlag) {
+    if (HaveADF) {
+      fprintf( output, "%s%s_syscall<A, Ar> syscall;\n", INDENT[1], project_name );
+    }
+    else {
+      fprintf( output, "%s%s_syscall syscall;\n", INDENT[1], project_name );
+    }
+  }
 
   /* current instruction ID */
   if ( ACCurInstrID )
@@ -1312,15 +1773,22 @@ void CreateISAHeader() {
 
   //Emitting Constructor.
   COMMENT(INDENT[1], "Constructor.");
-  fprintf( output,"%s%s_isa(%s_arch& ref) : %s_arch_ref(ref) ", INDENT[1],
-            project_name, project_name, project_name);
+  if (HaveADF) {
+    fprintf( output,"%s%s_isa(A& ref) : Ar(ref) ", INDENT[1], project_name); 
+  }
+  else {
+    fprintf( output,"%s%s_isa(%s_arch& ref) : %s_arch_ref(ref) ", INDENT[1],
+              project_name, project_name, project_name);
+  }
   if (ACABIFlag)
     fprintf(output, ", syscall(ref)");
   fprintf( output," {\n");
 
-  COMMENT(INDENT[2], "Building Decoder.");
-  fprintf( output,"%sdecoder = ac_decoder_full::CreateDecoder(%s_isa::formats, %s_isa::instructions, &ref);\n",
-           INDENT[2], project_name, project_name );
+  if (!HaveADF) {
+    COMMENT(INDENT[2], "Building Decoder.");
+    fprintf( output,"%sdecoder = ac_decoder_full::CreateDecoder(%s_isa::formats, %s_isa::instructions, &ref);\n",
+             INDENT[2], project_name, project_name );
+  }
 
   /* Closing constructor declaration. */
   fprintf( output,"%s}\n\n", INDENT[1] );
@@ -1445,15 +1913,28 @@ void CreateISAHeader() {
   fprintf( output, "#define _%s_BHV_MACROS_H\n\n", upper_project_name);
 
   /* ac_memory TYPEDEF */
-  fprintf(output, "typedef ac_memport<%s_parms::ac_word, %s_parms::ac_Hword> ac_memory;\n\n",
-          project_name, project_name);
+  if (!HaveADF) {
+    fprintf(output, "typedef ac_memport<%s_parms::ac_word, %s_parms::ac_Hword> ac_memory;\n\n",
+            project_name, project_name);
+  }
+
+  if (HaveADF) {
+    fprintf(output, "template class %s_parms::%s_isa<%s_arch, %s_arch_ref>;\n", project_name, project_name, project_name, project_name);
+    fprintf(output, "template class %s_parms::%s_isa<VArchC::Arch, VArchC::Arch_ref>;\n\n", project_name, project_name);
+  }
 
   /* ac_behavior main macro */
   fprintf( output, "#define ac_behavior(instr) AC_BEHAVIOR_##instr ()\n\n");
 
   /* ac_behavior 2nd level macros - generic instruction */
-  fprintf(output, "#define AC_BEHAVIOR_instruction() %s_parms::%s_isa::_behavior_instruction(",
-          project_name, project_name);
+  if (HaveADF) {
+    fprintf(output, "#define AC_BEHAVIOR_instruction() extern *_AC_BEHAVIOR_instruction; template <class A, class Ar> void %s_parms::%s_isa<A, Ar>::_behavior_instruction(",
+            project_name, project_name);
+  }
+  else {
+    fprintf(output, "#define AC_BEHAVIOR_instruction() %s_parms::%s_isa::_behavior_instruction(",
+            project_name, project_name);
+  }
 
   /* common_instr_field_list has the list of fields for the generic instruction. */
   for( pfield = common_instr_field_list; pfield != NULL; pfield = pfield->next){
@@ -1472,18 +1953,33 @@ void CreateISAHeader() {
   fprintf(output, ")\n\n");
 
   /* ac_behavior 2nd level macros - pseudo-instructions begin, end */
-  fprintf(output, "#define AC_BEHAVIOR_begin() %s_parms::%s_isa::_behavior_begin()\n",
-          project_name, project_name);
-  fprintf(output, "#define AC_BEHAVIOR_end() %s_parms::%s_isa::_behavior_end()\n",
-          project_name, project_name);
+  if (HaveADF) {
+    fprintf(output, "#define AC_BEHAVIOR_begin() extern *_AC_BEHAVIOR_begin; template <class A, class Ar> void %s_parms::%s_isa<A, Ar>::_behavior_begin()\n",
+            project_name, project_name);
+    fprintf(output, "#define AC_BEHAVIOR_end() extern *_AC_BEHAVIOR_end; template <class A, class Ar> void %s_parms::%s_isa<A, Ar>::_behavior_end()\n",
+            project_name, project_name);
+  }
+  else {
+    fprintf(output, "#define AC_BEHAVIOR_begin() %s_parms::%s_isa::_behavior_begin()\n",
+            project_name, project_name);
+    fprintf(output, "#define AC_BEHAVIOR_end() %s_parms::%s_isa::_behavior_end()\n",
+            project_name, project_name);
+  }
 
   fprintf(output, "\n");
 
   /* ac_behavior 2nd level macros - instruction types */
   for( pformat = format_ins_list; pformat!= NULL; pformat=pformat->next) {
-    fprintf(output, "#define AC_BEHAVIOR_%s() %s_parms::%s_isa::_behavior_%s_%s(",
-            pformat->name, project_name, project_name,
-            project_name, pformat->name);
+    if (HaveADF) {
+      fprintf(output, "#define AC_BEHAVIOR_%s() extern *_AC_BEHAVIOR_%s; template <class A, class Ar> void %s_parms::%s_isa<A, Ar>::_behavior_%s_%s(",
+              pformat->name, pformat->name, project_name, project_name,
+              project_name, pformat->name);
+    }
+    else {
+      fprintf(output, "#define AC_BEHAVIOR_%s() %s_parms::%s_isa::_behavior_%s_%s(",
+              pformat->name, project_name, project_name,
+              project_name, pformat->name);
+    }
     for (pfield = pformat->fields; pfield != NULL; pfield = pfield->next) {
       if (!pfield->sign) fprintf(output, "u");
 
@@ -1503,8 +1999,14 @@ void CreateISAHeader() {
 
   /* ac_behavior 2nd level macros - instructions */
   for (pinstr = instr_list; pinstr != NULL; pinstr = pinstr->next) {
-    fprintf(output, "#define AC_BEHAVIOR_%s() %s_parms::%s_isa::behavior_%s(",
-            pinstr->name, project_name, project_name, pinstr->name);
+    if (HaveADF) {
+      fprintf(output, "#define AC_BEHAVIOR_%s() extern *_AC_BEHAVIOR_%s; template <class A, class Ar> void %s_parms::%s_isa<A, Ar>::behavior_%s(",
+              pinstr->name, pinstr->name, project_name, project_name, pinstr->name);
+    }
+    else {
+      fprintf(output, "#define AC_BEHAVIOR_%s() %s_parms::%s_isa::behavior_%s(",
+              pinstr->name, project_name, project_name, pinstr->name);
+    }
     for (pformat = format_ins_list;
           (pformat != NULL) && strcmp(pinstr->format, pformat->name);
           pformat = pformat->next);
@@ -1529,12 +2031,32 @@ void CreateISAHeader() {
   fclose( output);
 }
 
+void EmitProcessorCtorBody(FILE* output, int indent) {
+  extern int ACVerboseFlag, ACWaitFlag;
+  fprintf( output, "%sSC_THREAD( behavior );\n", INDENT[indent]);
+  fprintf( output, "%ssensitive << wake;\n", INDENT[indent]);
+
+  if (ACVerboseFlag) {
+    fprintf( output, "%sSC_THREAD( ac_verify );\n", INDENT[indent]);
+    fprintf( output, "%ssensitive << done;\n\n", INDENT[indent]);
+  }
+
+  fprintf( output,"%shas_delayed_load = false; \n", INDENT[indent]);
+
+  fprintf( output, "%sstart_up=1;\n", INDENT[indent]);
+  fprintf( output, "%sac_id.write(globalId++);\n", INDENT[indent]);
+
+
+  if (ACWaitFlag)
+    fprintf(output, "%sset_proc_freq(1000/module_period_ns);\n", INDENT[indent]);
+}
 
 //!Creates Processor Module Header File
-void CreateProcessorHeader() {
+void CreateProcessorHeader(int varchc_version) {
   extern char *project_name;
   extern char *upper_project_name;
   extern int HaveTLMIntrPorts, largest_format_size;
+  extern int HaveADF;
 
   extern int HaveTLM2IntrPorts;
   extern ac_sto_list *tlm2_intr_port_list;
@@ -1548,7 +2070,12 @@ void CreateProcessorHeader() {
   // File containing ISA declaration
   FILE  *output;
 
-  sprintf( filename, "%s.H", project_name);
+  if (varchc_version) {
+    sprintf( filename, "%s_varchc.H", project_name);
+  }
+  else {
+    sprintf( filename, "%s.H", project_name);
+  }
 
   if ( !(output = fopen( filename, "w"))){
     perror("ArchC could not open output file");
@@ -1557,8 +2084,14 @@ void CreateProcessorHeader() {
 
   print_comment( output, description);
 
-  fprintf( output, "#ifndef  _%s_H\n", upper_project_name);
-  fprintf( output, "#define  _%s_H\n\n", upper_project_name);
+  if (varchc_version) {
+    fprintf( output, "#ifndef  _%s_VARCHC_H\n", upper_project_name);
+    fprintf( output, "#define  _%s_VARCHC_H\n\n", upper_project_name);
+  }
+  else {
+    fprintf( output, "#ifndef  _%s_H\n", upper_project_name);
+    fprintf( output, "#define  _%s_H\n\n", upper_project_name);
+  }
 
   fprintf( output, "#include \"%s_parms.H\"\n", project_name);
   fprintf( output, "#include \"systemc.h\"\n");
@@ -1567,8 +2100,18 @@ void CreateProcessorHeader() {
 #ifdef HLT_SUPPORT
   fprintf( output, "#include \"ac_hltrace.H\"\n");
 #endif
-  fprintf( output, "#include \"%s_arch.H\"\n", project_name);
-  fprintf( output, "#include \"%s_isa.H\"\n", project_name);
+  if (HaveADF) {
+    if (varchc_version) {
+      fprintf( output, "#include \"%s_varchc_arch.H\"\n", project_name);
+    }
+    else {
+      fprintf( output, "#include \"%s_arch.H\"\n", project_name);
+    }
+  }
+  else {
+    fprintf( output, "#include \"%s_arch.H\"\n", project_name);
+    fprintf( output, "#include \"%s_isa.H\"\n", project_name);
+  }
 
   // POWER ESTIMATION SUPPORT
 
@@ -1579,8 +2122,10 @@ void CreateProcessorHeader() {
   }
 
 
-  if (ACABIFlag)
-    fprintf( output, "#include \"%s_syscall.H\"\n", project_name);
+  if (HaveADF) {
+    if (ACABIFlag)
+      fprintf( output, "#include \"%s_syscall.H\"\n", project_name);
+  }
 
   if (HaveTLMIntrPorts) {
     fprintf(output, "#include \"ac_tlm_intr_port.H\"\n");
@@ -1597,14 +2142,25 @@ if (HaveTLM2IntrPorts) {
     fprintf( output, "#include \"ac_gdb.H\"\n");
   }
 
-  fprintf(output, "\n\nclass %s: public ac_module, public %s_arch",
+  if(varchc_version) {
+    fprintf(output, "namespace VArchC {\n");
+    fprintf(output, "class %s: public ac_module, public Arch", project_name);
+  }
+  else {
+    fprintf(output, "\n\nclass %s: public ac_module, public %s_arch",
           project_name, project_name);
+  }
   if (ACGDBIntegrationFlag)
     fprintf(output, ", public AC_GDB_Interface<%s_parms::ac_word>",
             project_name);
   fprintf(output, " {\n");
-
-  fprintf(output, "private:\n");
+  
+  if (HaveADF && varchc_version) {
+    fprintf(output, "public:\n");
+  }
+  else {
+    fprintf(output, "private:\n");
+  }
   if( ACDecCacheFlag ) {
     EmitDecCache(output, 1);
   }
@@ -1636,8 +2192,11 @@ if (HaveTLM2IntrPorts) {
 
   fprintf( output, "%sbool has_delayed_load;\n", INDENT[1]);
   fprintf( output, "%schar* delayed_load_program;\n", INDENT[1]);
-  fprintf( output, "%s%s_parms::%s_isa ISA;\n",
-           INDENT[1], project_name, project_name);
+
+  if(!HaveADF) {
+    fprintf( output, "%s%s_parms::%s_isa ISA;\n",
+             INDENT[1], project_name, project_name);
+  }
 
   if (HaveTLMIntrPorts) {
     for (pport = tlm_intr_port_list; pport != NULL; pport = pport->next) {
@@ -1705,63 +2264,85 @@ if (HaveTLM2IntrPorts) {
 
   // POWER ESTIMATION SUPPORT
 
-  if (ACPowerEnable) {
-    fprintf( output, "\n#ifdef POWER_SIM\n");
-    fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), %s_arch(), ISA(*this), ps((const char*)name_)",
-           INDENT[1], project_name, project_name);
-    fprintf( output, "\n#else\n");
-    fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), %s_arch(), ISA(*this)",
-            INDENT[1], project_name, project_name);
-    fprintf( output, "\n#endif\n");
+  if (HaveADF) {
+    if (varchc_version) {
+      if (ACPowerEnable) {
+        fprintf( output, "\n#ifdef POWER_SIM\n");
+        fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), Arch(), ps((const char*)name_)",
+               INDENT[1], project_name);
+        fprintf( output, "\n#else\n");
+        fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), Arch()",
+                INDENT[1], project_name);
+        fprintf( output, "\n#endif\n");
+      }
+
+      else
+      {
+        fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), Arch()",
+                INDENT[1], project_name);
+
+      }
+    }
+    else {
+      if (ACPowerEnable) {
+        fprintf( output, "\n#ifdef POWER_SIM\n");
+        fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), %s_arch(), ps((const char*)name_)",
+               INDENT[1], project_name, project_name);
+        fprintf( output, "\n#else\n");
+        fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), %s_arch()",
+                INDENT[1], project_name, project_name);
+        fprintf( output, "\n#endif\n");
+      }
+
+      else
+      {
+        fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), %s_arch()",
+                INDENT[1], project_name, project_name);
+
+      }
+    }
   }
+  else {
+    if (ACPowerEnable) {
+      fprintf( output, "\n#ifdef POWER_SIM\n");
+      fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), %s_arch(), ISA(*this), ps((const char*)name_)",
+             INDENT[1], project_name, project_name);
+      fprintf( output, "\n#else\n");
+      fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), %s_arch(), ISA(*this)",
+              INDENT[1], project_name, project_name);
+      fprintf( output, "\n#endif\n");
+    }
 
-  else
-  {
-    fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), %s_arch(), ISA(*this)",
-            INDENT[1], project_name, project_name);
+    else
+    {
+      fprintf( output, "%s%s( sc_module_name name_ ): ac_module(name_), %s_arch(), ISA(*this)",
+              INDENT[1], project_name, project_name);
 
+    }
   }
-
 
 
   if (HaveTLMIntrPorts) {
     for (pport = tlm_intr_port_list; pport != NULL; pport = pport->next) {
       fprintf(output, ", %s_hnd(*this,&wake)", pport->name);
       fprintf(output, ", %s(\"%s\", %s_hnd)",
-              pport->name, pport->name, pport->name);
+          pport->name, pport->name, pport->name);
     }
   }
 
 
-
-   if (HaveTLM2IntrPorts) {
-       for (pport = tlm2_intr_port_list; pport != NULL; pport = pport->next) {
-    fprintf(output, ", %s_hnd(*this,&wake)", pport->name);
-    fprintf(output, ", %s(\"%s\", %s_hnd)", pport->name, pport->name, pport->name);
-         }
-       }
+  if (HaveTLM2IntrPorts) {
+    for (pport = tlm2_intr_port_list; pport != NULL; pport = pport->next) {
+      fprintf(output, ", %s_hnd(*this,&wake)", pport->name);
+      fprintf(output, ", %s(\"%s\", %s_hnd)", pport->name, pport->name, pport->name);
+    }
+  }
 
 
   fprintf(output, " {\n");
-
-  fprintf( output, "%sSC_THREAD( behavior );\n", INDENT[2]);
-  fprintf( output, "%ssensitive << wake;\n", INDENT[2]);
-
-  if (ACVerboseFlag) {
-    fprintf( output, "%sSC_THREAD( ac_verify );\n", INDENT[2]);
-    fprintf( output, "%ssensitive<< done;\n\n", INDENT[2]);
-  }
-
-  fprintf( output,"%shas_delayed_load = false; \n", INDENT[2]);
-
-  fprintf( output, "%sstart_up=1;\n", INDENT[2]);
-  fprintf( output, "%sac_id.write(globalId++);\n", INDENT[2]);
-
-
-  if (ACWaitFlag)
-    fprintf(output, "%sset_proc_freq(1000/module_period_ns);\n", INDENT[2]);
-
+  EmitProcessorCtorBody(output, 2);
   fprintf( output, "%s}\n\n", INDENT[1]);  //end constructor
+
 
   if(ACDecCacheFlag) {
     fprintf( output, "%svoid init_dec_cache() {\n", INDENT[1]);
@@ -1821,8 +2402,18 @@ if (HaveTLM2IntrPorts) {
   fprintf( output, "%svirtual ~%s() {};\n\n", INDENT[1], project_name);
 
   //!Closing class declaration.
-  fprintf( output,"%s};\n", INDENT[0] );
-  fprintf( output, "#endif  //_%s_H\n\n", upper_project_name);
+  fprintf( output,"%s};\n\n", INDENT[0] );
+
+  if (varchc_version) {
+    fprintf( output, "}\n\n");
+  }
+
+  if (varchc_version) {
+    fprintf( output, "#endif  //_%s_VARCHC_H\n\n", upper_project_name);
+  }
+  else {
+    fprintf( output, "#endif  //_%s_H\n\n", upper_project_name);
+  }
 
   fclose( output);
 }
@@ -2054,12 +2645,75 @@ void CreateStatsImplTmpl() {
 
 
 /////////////////////////// Create Implementation Functions ////////////////////////////
+void EmitProcessorBhvMethod(FILE *output, const char* prefix, int varchc_version) {
+  fprintf( output, "void %s::behavior() {\n\n", prefix);
+  if( ACDebugFlag ){
+    fprintf( output, "%sextern bool ac_do_trace;\n", INDENT[1]);
+    fprintf( output, "%sextern ofstream trace_file;\n", INDENT[1]);
+  }
+
+  if( ACThreading )
+    EmitVetLabelAt(output, 1);
+  else
+    fprintf( output, "%sunsigned ins_id;\n", INDENT[1]);
+
+  /* Delayed program loading */
+  fprintf(output, "%sif (has_delayed_load) {\n", INDENT[1]);
+  fprintf(output, "%s%s_mport.load(delayed_load_program);\n", INDENT[2], load_device->name);
+  fprintf(output, "%sac_pc = ac_start_addr;\n", INDENT[2]);
+  fprintf(output, "%shas_delayed_load = false;\n", INDENT[2]);
+  fprintf(output, "%s}\n\n", INDENT[1]);
+
+  /*if( HaveMemHier ) {
+    fprintf( output, "%sif( ac_wait_sig ) {\n", INDENT[1]);
+    fprintf( output, "%sreturn;\n", INDENT[2]);
+    fprintf( output, "%s}\n\n", INDENT[1]);
+    }*/
+
+  if( ACFullDecode ) {
+    fprintf(output, "%sfor (decode_pc = ac_pc; decode_pc < dec_cache_size; decode_pc += %d) {\n",
+        INDENT[1], largest_format_size / 8);
+    EmitDecodification(output, 2);
+    fprintf( output, "%s}\n\n", INDENT[1]);
+  }
+
+  if ( ACThreading && ACABIFlag && ACDecCacheFlag) {
+    fprintf( output, "%s#define AC_SYSC(NAME,LOCATION) \\\n", INDENT[1]);
+    fprintf( output, "%sinstr_dec = (DEC_CACHE + (LOCATION", INDENT[1]);
+    if( ACIndexFix )
+      fprintf( output, " / %d", largest_format_size / 8);
+    fprintf( output, ")); \\\n");
+
+    if ( !ACFullDecode )
+      fprintf( output, "%sinstr_dec->valid = true; \\\n", INDENT[1]);
+
+    fprintf( output, "%sinstr_dec->id = 0; \\\n", INDENT[1]);
+    fprintf( output, "%sinstr_dec->end_rot = &&Sys_##LOCATION;\n\n", INDENT[1]);
+
+    fprintf( output, "%s#include <ac_syscall.def>\n", INDENT[1]);
+    fprintf( output, "%s#undef AC_SYSC\n\n", INDENT[1]);
+  }
+
+  // Longjmp of ac_annul_sig and ac_stop_flag
+  fprintf( output, "%sint action = setjmp(ac_env);\n", INDENT[1]);
+  if (ACLongJmpStop || ACThreading)
+    fprintf( output, "%sif (action == AC_ACTION_STOP) return;\n\n", INDENT[1]);
+
+  //Emitting processor behavior method implementation.
+  if( ACThreading )
+    EmitInstrExec(output, 1, varchc_version);
+  else
+    EmitProcessorBhv(output, 1, varchc_version);
+
+  fprintf( output, "%s} // behavior()\n\n", INDENT[0]);
+}
 
 //!Creates Processor Module Implementation File
-void CreateProcessorImpl() {
+void CreateProcessorImpl(int varchc_version) {
     extern ac_sto_list *storage_list;
     extern char *project_name;
     extern int HaveMemHier, ACGDBIntegrationFlag, largest_format_size;
+    extern int HaveADF;
     ac_sto_list *pstorage;
 
     extern ac_dec_instr *instr_list;
@@ -2067,8 +2721,14 @@ void CreateProcessorImpl() {
     char* filename;
     FILE* output;
 
-    filename = (char*) malloc(strlen(project_name)+strlen(".cpp")+1);
-    sprintf( filename, "%s.cpp", project_name);
+    if (varchc_version) {
+      filename = (char*) malloc(strlen(project_name)+strlen("_varchc.cpp")+1);
+      sprintf( filename, "%s_varchc.cpp", project_name);
+    }
+    else {
+      filename = (char*) malloc(strlen(project_name)+strlen(".cpp")+1);
+      sprintf( filename, "%s.cpp", project_name);
+    }
 
     if ( !(output = fopen( filename, "w"))){
         perror("ArchC could not open output file");
@@ -2076,75 +2736,31 @@ void CreateProcessorImpl() {
     }
 
     print_comment( output, "Processor Module Implementation File.");
-    fprintf( output, "#include  \"%s.H\"\n", project_name);
-    fprintf( output, "#include  \"%s_isa.cpp\"\n\n", project_name);
+    if (varchc_version) {
+      fprintf( output, "#include  \"%s_varchc.H\"\n", project_name);
+    }
+    else {
+      fprintf( output, "#include  \"%s.H\"\n", project_name);
+    }
+    
+    //if (HaveADF) {
+    //  fprintf( output, "#include  \"%s_isa.H\"\n\n", project_name);
+    //}
+    //else {
+      fprintf( output, "#include  \"%s_isa.cpp\"\n\n", project_name);
+    //}
 
     if( ACABIFlag )
         fprintf( output, "#include  \"%s_syscall.H\"\n\n", project_name);
 
+    if (varchc_version) {
+      fprintf( output, "namespace VArchC {\n");
+    }
+
     if( ACThreading )
         EmitDispatch(output, 0);
 
-    fprintf( output, "void %s::behavior() {\n\n", project_name);
-    if( ACDebugFlag ){
-        fprintf( output, "%sextern bool ac_do_trace;\n", INDENT[1]);
-        fprintf( output, "%sextern ofstream trace_file;\n", INDENT[1]);
-    }
-
-    if( ACThreading )
-        EmitVetLabelAt(output, 1);
-    else
-        fprintf( output, "%sunsigned ins_id;\n", INDENT[1]);
-
-    /* Delayed program loading */
-    fprintf(output, "%sif (has_delayed_load) {\n", INDENT[1]);
-    fprintf(output, "%s%s_mport.load(delayed_load_program);\n", INDENT[2], load_device->name);
-    fprintf(output, "%sac_pc = ac_start_addr;\n", INDENT[2]);
-    fprintf(output, "%shas_delayed_load = false;\n", INDENT[2]);
-    fprintf(output, "%s}\n\n", INDENT[1]);
-
-    /*if( HaveMemHier ) {
-      fprintf( output, "%sif( ac_wait_sig ) {\n", INDENT[1]);
-      fprintf( output, "%sreturn;\n", INDENT[2]);
-      fprintf( output, "%s}\n\n", INDENT[1]);
-      }*/
-
-    if( ACFullDecode ) {
-        fprintf(output, "%sfor (decode_pc = ac_pc; decode_pc < dec_cache_size; decode_pc += %d) {\n",
-                INDENT[1], largest_format_size / 8);
-        EmitDecodification(output, 2);
-        fprintf( output, "%s}\n\n", INDENT[1]);
-    }
-
-    if ( ACThreading && ACABIFlag && ACDecCacheFlag) {
-        fprintf( output, "%s#define AC_SYSC(NAME,LOCATION) \\\n", INDENT[1]);
-        fprintf( output, "%sinstr_dec = (DEC_CACHE + (LOCATION", INDENT[1]);
-        if( ACIndexFix )
-            fprintf( output, " / %d", largest_format_size / 8);
-        fprintf( output, ")); \\\n");
-
-        if ( !ACFullDecode )
-            fprintf( output, "%sinstr_dec->valid = true; \\\n", INDENT[1]);
-
-        fprintf( output, "%sinstr_dec->id = 0; \\\n", INDENT[1]);
-        fprintf( output, "%sinstr_dec->end_rot = &&Sys_##LOCATION;\n\n", INDENT[1]);
-
-        fprintf( output, "%s#include <ac_syscall.def>\n", INDENT[1]);
-        fprintf( output, "%s#undef AC_SYSC\n\n", INDENT[1]);
-    }
-
-    // Longjmp of ac_annul_sig and ac_stop_flag
-    fprintf( output, "%sint action = setjmp(ac_env);\n", INDENT[1]);
-    if (ACLongJmpStop || ACThreading)
-        fprintf( output, "%sif (action == AC_ACTION_STOP) return;\n\n", INDENT[1]);
-
-    //Emitting processor behavior method implementation.
-    if( ACThreading )
-        EmitInstrExec(output, 1);
-    else
-        EmitProcessorBhv(output, 1);
-
-    fprintf( output, "%s} // behavior()\n\n", INDENT[0]);
+    EmitProcessorBhvMethod(output, project_name, varchc_version);
 
     //Emitting Verification Method.
     if (ACVerboseFlag) {
@@ -2176,9 +2792,17 @@ void CreateProcessorImpl() {
         fprintf( output, "%s}\n\n", INDENT[0]);
     }
 
+    if (varchc_version) {
+      fprintf(output, "}\n\n");
+    }
+
     /* SIGNAL HANDLERS */
     fprintf(output, "#include <ac_sighandlers.H>\n");
     fprintf(output, "#include <ac_args.H>\n\n");
+
+    if (varchc_version) {
+      fprintf(output, "namespace VArchC {\n");
+    }
 
     /* init() and stop() */
     /* init() with no parameters */
@@ -2203,6 +2827,9 @@ void CreateProcessorImpl() {
     fprintf(output, "%sset_queue(av[0]);\n", INDENT[1]);
     fprintf(output, "#endif\n\n");
     fprintf(output, "%sac_pc = ac_start_addr;\n", INDENT[1]);
+    if (varchc_version) {
+      fprintf(output, "%sISA.cur_instr_id = 0;\n", INDENT[1]);
+    }
     fprintf(output, "%sISA._behavior_begin();\n", INDENT[1]);
     fprintf(output, "%scerr << endl << \"ArchC: -------------------- Starting Simulation --------------------\" << endl;\n",
             INDENT[1]);
@@ -2228,8 +2855,14 @@ void CreateProcessorImpl() {
     fprintf(output, "void %s::init(int ac, char *av[]) {\n\n", project_name);
     //  fprintf(output, "%sac_init_opts( ac, av);\n", INDENT[1]);
     fprintf(output, "%sargs_t args = ac_init_args( ac, av);\n", INDENT[1]);
+    if (varchc_version) {
+      fprintf(output, "%sthis->vac_control.initStats(args.app_filename);\n", INDENT[1]);
+    }
     fprintf(output, "%sset_args(args.size, args.app_args);\n", INDENT[1]);
     fprintf(output, "%s%s_mport.load(args.app_filename);\n", INDENT[1], load_device->name);
+    if (varchc_version) {
+      fprintf(output, "%s%s_mport.setAsControl(args.app_filename);\n", INDENT[1], load_device->name);
+    }
 
     if (ACGDBIntegrationFlag) {
         fprintf(output, "%senable_gdb(args.gdb_port);\n", INDENT[1]);
@@ -2253,6 +2886,9 @@ void CreateProcessorImpl() {
     fprintf(output, "%sset_queue(av[0]);\n", INDENT[1]);
     fprintf(output, "#endif\n\n");
     fprintf(output, "%sac_pc = ac_start_addr;\n", INDENT[1]);
+    if (varchc_version) {
+      fprintf(output, "%sISA.cur_instr_id = 0;\n", INDENT[1]);
+    }
     fprintf(output, "%sISA._behavior_begin();\n", INDENT[1]);
     fprintf(output, "%scerr << endl << \"ArchC: -------------------- Starting Simulation --------------------\" << endl;\n",
             INDENT[1]);
@@ -2284,6 +2920,9 @@ void CreateProcessorImpl() {
 
     fprintf(output, "%scerr << endl << \"ArchC: -------------------- Simulation Finished --------------------\" << endl;\n",
             INDENT[1]);
+    if (varchc_version) {
+      fprintf(output, "%sISA.cur_instr_id = 0;\n", INDENT[1]);
+    }
     fprintf(output, "%sISA._behavior_end();\n", INDENT[1]);
     fprintf(output, "%sac_stop_flag = 1;\n", INDENT[1]);
     fprintf(output, "%sac_exit_status = status;\n", INDENT[1]);
@@ -2343,6 +2982,9 @@ void CreateProcessorImpl() {
     /* PrintStat() */
     fprintf(output, "// Wrapper function to PrintStat().\n");
     fprintf(output, "void %s::PrintStat() {\n", project_name);
+    if (varchc_version) {
+      fprintf(output, "%sthis->vac_control.saveStats(%s_parms::%s_isa<VArchC::Arch, VArchC::Arch_ref>::instructions);\n\n", INDENT[1], project_name, project_name);
+    }
     fprintf(output, "%sac_arch<%s_parms::ac_word, %s_parms::ac_Hword>::PrintStat();\n",
             INDENT[1], project_name, project_name);
 
@@ -2387,9 +3029,9 @@ void CreateProcessorImpl() {
     }
     /* GDB enable method */
     if (ACGDBIntegrationFlag) {
-        fprintf(output, "// Enables GDB\n");
-        fprintf(output, "void %s::enable_gdb(int port) {\n", project_name);
-        fprintf(output, "%sunsigned gdbport = 5000;\n", INDENT[1]);
+      fprintf(output, "// Enables GDB\n");
+      fprintf(output, "void %s::enable_gdb(int port) {\n", project_name);
+      fprintf(output, "%sunsigned gdbport = 5000;\n", INDENT[1]);
         fprintf(output, "%sif (port > 1024)\n", INDENT[1]);
         fprintf(output, "%sgdbport = port;\n\n", INDENT[2]);
 
@@ -2402,23 +3044,32 @@ void CreateProcessorImpl() {
         fprintf(output, "}\n\n");
     }
 
+    if (varchc_version) {
+      fprintf(output, "}\n");
+    }
+
     //!END OF FILE.
     fclose(output);
     free(filename);
 }
 
 /** Creates the _arch.cpp Implementation File. */
-void CreateArchImpl() {
+void CreateArchImpl(int varchc_version) {
     extern ac_sto_list *storage_list, *fetch_device, *first_level_data_device;
     extern int HaveMemHier, HaveTLMPorts, HaveTLM2IntrPorts, HaveTLM2Ports,
-        HaveTLM2NBPorts, HaveTLM2IntrPorts;
+        HaveTLM2NBPorts, HaveTLM2IntrPorts, HaveADF;
     extern ac_sto_list *load_device;
     extern char *project_name;
     ac_sto_list *pstorage;
     FILE *output;
     char filename[256];
 
-    sprintf(filename, "%s_arch.cpp", project_name);
+    if (varchc_version) {
+      sprintf(filename, "%s_varchc_arch.cpp", project_name);
+    }
+    else {
+      sprintf(filename, "%s_arch.cpp", project_name);
+    }
 
     load_device = storage_list;
     if (!(output = fopen(filename, "w"))) {
@@ -2428,7 +3079,18 @@ void CreateArchImpl() {
 
     print_comment(output, "ArchC Resources Implementation file.");
 
-    fprintf(output, "#include \"%s_arch.H\"\n\n", project_name);
+    if (HaveADF) {
+      if (varchc_version) {
+        fprintf(output, "#include \"%s_varchc_arch.H\"\n\n", project_name);
+      }
+      else {
+        fprintf(output, "#include \"%s_arch.H\"\n\n", project_name);
+      }
+      fprintf(output, "#include \"ac_decoder_rt.H\"\n");
+    }
+    else {
+      fprintf(output, "#include \"%s_arch.H\"\n\n", project_name);
+    }
 
     if (HaveMemHier) {
         fprintf(output, "#include \"ac_cache_if.H\"\n");
@@ -2437,11 +3099,28 @@ void CreateArchImpl() {
     fprintf(output, "\n");
 
     /* Emitting Constructor */
-    fprintf(output, "%s%s_arch::%s_arch() :\n", INDENT[0], project_name,
-            project_name);
+    if (varchc_version) {
+      fprintf(output, "%sVArchC::Arch::Arch() :\n", INDENT[0]);
+    }
+    else {
+      fprintf(output, "%s%s_arch::%s_arch() :\n", INDENT[0], project_name,
+              project_name);
+    }
     fprintf(output, "%sac_arch_dec_if<%s_parms::ac_word, "
                     "%s_parms::ac_Hword>(%s_parms::AC_MAX_BUFFER),\n",
             INDENT[1], project_name, project_name, project_name);
+
+    if (HaveADF) {
+      fprintf(output, "\n%sISA(*this),\n", INDENT[1]);
+      if (varchc_version) {
+        if (ACCurInstrID) {
+          fprintf(output, "%svac_control(*this, &(this->ISA.cur_instr_id), &(this->ac_instr_counter)),\n", INDENT[1]);
+        }
+        else {
+          fprintf(output, "%svac_control(*this, &(this->ac_instr_counter)),\n", INDENT[1]);
+        }
+      }
+    }
 
     /* Constructing ac_pc */
     fprintf(output, "%sac_pc(\"ac_pc\", 0", INDENT[1]);
@@ -2468,6 +3147,10 @@ void CreateArchImpl() {
             if (ACDelayFlag)
                 fprintf(output, ", time_step");
 
+            if (varchc_version) {
+                fprintf(output, ", vac_control");
+            }
+
             fprintf(output, ")");
             break;
 
@@ -2478,6 +3161,10 @@ void CreateArchImpl() {
                     pstorage->name);
             if (ACDelayFlag)
                 fprintf(output, ", time_step");
+
+            if (varchc_version) {
+                fprintf(output, ", vac_control");
+            }
 
             fprintf(output, ")");
             break;
@@ -2497,44 +3184,80 @@ void CreateArchImpl() {
                         pstorage->name, pstorage->higher->name);
                 fprintf(output, ",\n%s%s_if(%s)", INDENT[1], pstorage->name,
                         pstorage->name);
-                fprintf(output, ",\n%s%s_mport(*this, %s_if)", INDENT[1],
-                        pstorage->name, pstorage->name);
+                if (varchc_version) {
+                  fprintf(output, ",\n%s%s_mport(*this, %s_if, vac_control)", INDENT[1],
+                          pstorage->name, pstorage->name);
+                }
+                else {
+                  fprintf(output, ",\n%s%s_mport(*this, %s_if)", INDENT[1],
+                          pstorage->name, pstorage->name);
+                }
             }
             break;
 
         case MEM:
             fprintf(output, "%s%s(\"%s\", %uU),\n", INDENT[1], pstorage->name,
                     pstorage->name, pstorage->size);
-            fprintf(output, "%s%s_mport(*this, %s)", INDENT[1], pstorage->name,
-                    pstorage->name);
+            if (varchc_version) {
+              fprintf(output, "%s%s_mport(*this, %s, vac_control)", INDENT[1], pstorage->name,
+                      pstorage->name);
+            }
+            else {
+              fprintf(output, "%s%s_mport(*this, %s)", INDENT[1], pstorage->name,
+                      pstorage->name);
+            }
             break;
 
         case TLM_PORT:
             fprintf(output, "%s%s(\"%s\", %uU),\n", INDENT[1], pstorage->name,
                     pstorage->name, pstorage->size);
-            fprintf(output, "%s%s_mport(*this, %s)", INDENT[1], pstorage->name,
-                    pstorage->name);
+            if (varchc_version) {
+              fprintf(output, "%s%s_mport(*this, %s, vac_control)", INDENT[1], pstorage->name,
+                      pstorage->name);
+            }
+            else {
+              fprintf(output, "%s%s_mport(*this, %s)", INDENT[1], pstorage->name,
+                      pstorage->name);
+            }
             break;
 
         case TLM2_PORT:
             fprintf(output, "%s%s(\"%s\", %uU),\n", INDENT[1], pstorage->name,
                     pstorage->name, pstorage->size);
-            fprintf(output, "%s%s_mport(*this, %s)", INDENT[1], pstorage->name,
-                    pstorage->name);
+            if (varchc_version) {
+              fprintf(output, "%s%s_mport(*this, %s, vac_control)", INDENT[1], pstorage->name,
+                      pstorage->name);
+            }
+            else {
+              fprintf(output, "%s%s_mport(*this, %s)", INDENT[1], pstorage->name,
+                      pstorage->name);
+            }
             break;
 
         case TLM2_NB_PORT:
             fprintf(output, "%s%s(\"%s\", %uU),\n", INDENT[1], pstorage->name,
                     pstorage->name, pstorage->size);
-            fprintf(output, "%s%s_mport(*this, %s)", INDENT[1], pstorage->name,
-                    pstorage->name);
+            if (varchc_version) {
+              fprintf(output, "%s%s_mport(*this, %s, vac_control)", INDENT[1], pstorage->name,
+                      pstorage->name);
+            }
+            else {
+              fprintf(output, "%s%s_mport(*this, %s)", INDENT[1], pstorage->name,
+                      pstorage->name);
+            }
             break;
 
         default:
             fprintf(output, "%s%s(\"%s\", %uU),\n", INDENT[1], pstorage->name,
                     pstorage->name, pstorage->size);
-            fprintf(output, "%s%s_mport(*this, %s)", INDENT[1], pstorage->name,
-                    pstorage->name);
+            if (varchc_version) {
+              fprintf(output, "%s%s_mport(*this, %s, vac_control)", INDENT[1], pstorage->name,
+                      pstorage->name);
+            }
+            else {
+              fprintf(output, "%s%s_mport(*this, %s)", INDENT[1], pstorage->name,
+                      pstorage->name);
+            }
             break;
         }
         if (pstorage->next != NULL)
@@ -2581,15 +3304,35 @@ void CreateArchImpl() {
     fprintf(output, "%sDATA_PORT = &%s_mport;\n", INDENT[1],
             first_level_data_device->name);
 
+    if (varchc_version) {
+      fprintf(output, "%sac_arch_dec_if<%s_parms::ac_word, %s_parms::ac_Hword>::INST_PORT = %s_mport.get_proxy();\n", INDENT[1], project_name, project_name, fetch_device->name);
+      fprintf(output, "%sac_arch_dec_if<%s_parms::ac_word, %s_parms::ac_Hword>::DATA_PORT = %s_mport.get_proxy();\n", INDENT[1], project_name, project_name, fetch_device->name);
+    }
+
+    if (HaveADF) {
+      if (varchc_version) {
+        fprintf(output, "\n%sISA.decoder = ac_decoder_full::CreateDecoder(%s_parms::%s_isa<Arch, Arch_ref>::formats, %s_parms::%s_isa<Arch, Arch_ref>::instructions, this);\n", INDENT[1], project_name, project_name, project_name, project_name);
+      }
+      else {
+        fprintf(output, "\n%sISA.decoder = ac_decoder_full::CreateDecoder(%s_parms::%s_isa<%s_arch, %s_arch_ref>::formats, %s_parms::%s_isa<%s_arch, %s_arch_ref>::instructions, this);\n", INDENT[1], project_name, project_name, project_name, project_name, project_name, project_name, project_name, project_name);
+      }
+    }
+
     fprintf(output, "}\n\n");
 
-    fprintf(output, "int %s_arch::globalId = 0;", project_name);
+    if (varchc_version) {
+      fprintf(output, "int VArchC::Arch::globalId = 0;");
+    }
+    else {
+      fprintf(output, "int %s_arch::globalId = 0;", project_name);
+    }
 }
 
 /*!Create the template for the .cpp file where the user has
   the basic code for the main function. */
 void CreateMainTmpl() {
   extern char *project_name;
+  extern int HaveADF;
   char filename[] = "main.cpp.tmpl";
   char description[256];
 
@@ -2613,14 +3356,23 @@ void CreateMainTmpl() {
   fprintf( output, "#include  <systemc.h>\n");
   fprintf( output, "#include  \"ac_stats_base.H\"\n");
   fprintf( output, "#include  \"%s.H\"\n\n", project_name);
+  if (HaveADF) {
+    fprintf( output, "#include  \"%s_varchc.H\"\n\n", project_name);
+  }
 
   fprintf( output, "\n\n");
   fprintf( output, "int sc_main(int ac, char *av[])\n");
   fprintf( output, "{\n\n");
 
   COMMENT(INDENT[1],"%sISA simulator", INDENT[1]);
-  fprintf( output, "%s%s %s_proc1(\"%s\");\n\n",
-           INDENT[1], project_name, project_name, project_name);
+  if (HaveADF) {
+    fprintf( output, "%sVArchC::%s %s_proc1(\"%s\");\n\n",
+             INDENT[1], project_name, project_name, project_name);
+  }
+  else {
+    fprintf( output, "%s%s %s_proc1(\"%s\");\n\n",
+             INDENT[1], project_name, project_name, project_name);
+  }
 
   fprintf( output, "#ifdef AC_DEBUG\n");
   fprintf( output, "%sac_trace(\"%s_proc1.trace\");\n",
@@ -2662,6 +3414,7 @@ void CreateImplTmpl(){
   extern char *project_name;
   extern int wordsize;
   extern int declist_num;
+  extern int HaveADF;
 
   ac_grp_list* pgroup;
   ac_instr_ref_list* pref;
@@ -2747,9 +3500,19 @@ void CreateImplTmpl(){
   /* Creating group tables. */
   for (pgroup = group_list; pgroup != NULL; pgroup = pgroup->next) {
     COMMENT(INDENT[0], "Group %s table initialization.", pgroup->name);
-    fprintf(output, "%sbool %s_parms::%s_isa::group_%s[%s_parms::AC_DEC_INSTR_NUMBER] =\n%s{\n",
-            INDENT[0], project_name, project_name, pgroup->name,
-            project_name, INDENT[1]);
+    
+    if(HaveADF) {
+      fprintf(output, "%stemplate <class A, class Ar>\n", INDENT[0]);
+      fprintf(output, "%sbool %s_parms::%s_isa<A, Ar>::group_%s[%s_parms::AC_DEC_INSTR_NUMBER] =\n%s{\n",
+              INDENT[0], project_name, project_name, pgroup->name,
+              project_name, INDENT[1]);
+    }
+    else {
+      fprintf(output, "%sbool %s_parms::%s_isa::group_%s[%s_parms::AC_DEC_INSTR_NUMBER] =\n%s{\n",
+              INDENT[0], project_name, project_name, pgroup->name,
+              project_name, INDENT[1]);
+    }
+
     for (pinstr = instr_list; pinstr != NULL; pinstr = pinstr->next) {
       for (pref = pgroup->instrs; pref != NULL; pref = pref->next)
         if (pref->instr == pinstr)
@@ -2769,8 +3532,16 @@ void CreateImplTmpl(){
   COMMENT(INDENT[0],"Fields table declaration.");
 
   /* Creating field table */
-  fprintf(output, "ac_dec_field %s_parms::%s_isa::fields[%s_parms::AC_DEC_FIELD_NUMBER] = {\n",
-          project_name, project_name, project_name);
+  if (HaveADF) {
+    fprintf(output, "template <class A, class Ar>\n");
+    fprintf(output, "ac_dec_field %s_parms::%s_isa<A, Ar>::fields[%s_parms::AC_DEC_FIELD_NUMBER] = {\n",
+            project_name, project_name, project_name);
+  }
+  else {
+    fprintf(output, "ac_dec_field %s_parms::%s_isa::fields[%s_parms::AC_DEC_FIELD_NUMBER] = {\n",
+            project_name, project_name, project_name);
+  }
+
   i = 0;
   for (pformat = format_ins_list; pformat != NULL; pformat = pformat->next) {
     for (pdecfield = pformat->fields; pdecfield != NULL; pdecfield = pdecfield->next) {
@@ -2783,8 +3554,14 @@ void CreateImplTmpl(){
               pdecfield->id,
               pdecfield->val,
               pdecfield->sign);
-      if (pdecfield->next)
-        fprintf(output, "&(%s_parms::%s_isa::fields[%d])},\n", project_name, project_name, i + 1);
+      if (pdecfield->next) {
+        if (HaveADF) {
+          fprintf(output, "&(%s_parms::%s_isa<A, Ar>::fields[%d])},\n", project_name, project_name, i + 1);
+        }
+        else {
+          fprintf(output, "&(%s_parms::%s_isa::fields[%d])},\n", project_name, project_name, i + 1);
+        }
+      }
       else
         fprintf(output, "NULL}");
 
@@ -2796,25 +3573,54 @@ void CreateImplTmpl(){
   fprintf(output, "\n};\n\n");
 
   /* Creating format structure */
-  fprintf(output, "ac_dec_format %s_parms::%s_isa::formats[%s_parms::AC_DEC_FORMAT_NUMBER] = {\n",
-          project_name, project_name, project_name);
+  if (HaveADF) {
+    fprintf(output, "template <class A, class Ar>\n");
+    fprintf(output, "ac_dec_format %s_parms::%s_isa<A, Ar>::formats[%s_parms::AC_DEC_FORMAT_NUMBER] = {\n",
+            project_name, project_name, project_name);
+  }
+  else {
+    fprintf(output, "ac_dec_format %s_parms::%s_isa::formats[%s_parms::AC_DEC_FORMAT_NUMBER] = {\n",
+            project_name, project_name, project_name);
+  }
+
   i = 0;
   count_fields = 0;
   for( pformat = format_ins_list; pformat!= NULL; pformat = pformat->next){
     /* fprintf int id, char* name, int size, ac_dec_field* fields, next */
-    fprintf(output, "%s{%d, \"%s\", %d, &(%s_parms::%s_isa::fields[%d]), ",
-            INDENT[1],
-            pformat->id,
-            pformat->name,
-            pformat->size,
-            project_name,
-            project_name,
-            count_fields);
-    if (pformat->next)
-      fprintf(output, "&(%s_parms::%s_isa::formats[%d])},\n",
+    if (HaveADF) {
+      fprintf(output, "%s{%d, \"%s\", %d, &(%s_parms::%s_isa<A, Ar>::fields[%d]), ",
+              INDENT[1],
+              pformat->id,
+              pformat->name,
+              pformat->size,
               project_name,
               project_name,
-              i + 1);
+              count_fields);
+    }
+    else {
+      fprintf(output, "%s{%d, \"%s\", %d, &(%s_parms::%s_isa::fields[%d]), ",
+              INDENT[1],
+              pformat->id,
+              pformat->name,
+              pformat->size,
+              project_name,
+              project_name,
+              count_fields);
+    }
+    if (pformat->next) {
+      if (HaveADF) {
+        fprintf(output, "&(%s_parms::%s_isa<A, Ar>::formats[%d])},\n",
+                project_name,
+                project_name,
+                i + 1);
+      }
+      else {
+        fprintf(output, "&(%s_parms::%s_isa::formats[%d])},\n",
+                project_name,
+                project_name,
+                i + 1);
+      }
+    }
     else
       fprintf(output, "NULL}");
 
@@ -2826,8 +3632,16 @@ void CreateImplTmpl(){
   fprintf(output, "\n};\n\n");
 
   /* Creating decode list structure */
-  fprintf(output, "ac_dec_list %s_parms::%s_isa::dec_list[%s_parms::AC_DEC_LIST_NUMBER] = {\n",
-          project_name, project_name, project_name);
+  if (HaveADF) {
+    fprintf(output, "template <class A, class Ar>\n");
+    fprintf(output, "ac_dec_list %s_parms::%s_isa<A, Ar>::dec_list[%s_parms::AC_DEC_LIST_NUMBER] = {\n",
+            project_name, project_name, project_name);
+  }
+  else {
+    fprintf(output, "ac_dec_list %s_parms::%s_isa::dec_list[%s_parms::AC_DEC_LIST_NUMBER] = {\n",
+            project_name, project_name, project_name);
+  }
+
   i = 0;
   for (pinstr = instr_list; pinstr != NULL; pinstr = pinstr->next) {
     for (pdeclist = pinstr->dec_list; pdeclist != NULL;
@@ -2838,9 +3652,16 @@ void CreateImplTmpl(){
               pdeclist->name,
               pdeclist->id,
               pdeclist->value);
-      if (pdeclist->next)
-        fprintf(output, "&(%s_parms::%s_isa::dec_list[%d])},\n",
-                project_name, project_name, i + 1);
+      if (pdeclist->next) {
+        if (HaveADF) {
+          fprintf(output, "&(%s_parms::%s_isa<A, Ar>::dec_list[%d])},\n",
+                  project_name, project_name, i + 1);
+        }
+        else {
+          fprintf(output, "&(%s_parms::%s_isa::dec_list[%d])},\n",
+                  project_name, project_name, i + 1);
+        }
+      }
       else
         fprintf(output, "NULL}");
 
@@ -2853,30 +3674,63 @@ void CreateImplTmpl(){
   declist_num = i;
 
   /* Creating instruction structure */
-  fprintf(output,
-          "ac_dec_instr %s_parms::%s_isa::instructions[%s_parms::AC_DEC_INSTR_NUMBER] = {\n",
-          project_name, project_name, project_name);
+  if (HaveADF) {
+    fprintf(output, "template <class A, class Ar>\n");
+    fprintf(output,
+            "ac_dec_instr %s_parms::%s_isa<A, Ar>::instructions[%s_parms::AC_DEC_INSTR_NUMBER] = {\n",
+            project_name, project_name, project_name);
+  }
+  else {
+    fprintf(output,
+            "ac_dec_instr %s_parms::%s_isa::instructions[%s_parms::AC_DEC_INSTR_NUMBER] = {\n",
+            project_name, project_name, project_name);
+  }
   i = 0;
   count_fields = 0;
   for (pinstr = instr_list; pinstr != NULL; pinstr = pinstr->next) {
     /* fprintf char* name, int size, char* mnemonic, char* asm_str, char* format, unsigned id, unsigned cycles, unsigned min_latency, unsigned max_latency, ac_dec_list* dec_list, ac_control_flow* cflow, ac_dec_instr* next */
-    fprintf(output, "%s{\"%s\", %d, \"%s\", \"%s\", \"%s\", %d, %d, %d, %d, &(%s_parms::%s_isa::dec_list[%d]), %d, ",
-            INDENT[1],
-            pinstr->name,
-            pinstr->size,
-            pinstr->mnemonic,
-            pinstr->asm_str,
-            pinstr->format,
-            pinstr->id,
-            pinstr->cycles,
-            pinstr->min_latency,
-            pinstr->max_latency,
-            project_name,
-            project_name,
-            count_fields,
-            0);
-    if (pinstr->next)
-      fprintf(output, "&(%s_parms::%s_isa::instructions[%d])},\n", project_name, project_name, i + 1);
+    if (HaveADF) {
+      fprintf(output, "%s{\"%s\", %d, \"%s\", \"%s\", \"%s\", %d, %d, %d, %d, &(%s_parms::%s_isa<A, Ar>::dec_list[%d]), %d, ",
+              INDENT[1],
+              pinstr->name,
+              pinstr->size,
+              pinstr->mnemonic,
+              pinstr->asm_str,
+              pinstr->format,
+              pinstr->id,
+              pinstr->cycles,
+              pinstr->min_latency,
+              pinstr->max_latency,
+              project_name,
+              project_name,
+              count_fields,
+              0);
+    }
+    else {
+      fprintf(output, "%s{\"%s\", %d, \"%s\", \"%s\", \"%s\", %d, %d, %d, %d, &(%s_parms::%s_isa::dec_list[%d]), %d, ",
+              INDENT[1],
+              pinstr->name,
+              pinstr->size,
+              pinstr->mnemonic,
+              pinstr->asm_str,
+              pinstr->format,
+              pinstr->id,
+              pinstr->cycles,
+              pinstr->min_latency,
+              pinstr->max_latency,
+              project_name,
+              project_name,
+              count_fields,
+              0);
+    }
+    if (pinstr->next) {
+      if (HaveADF) {
+        fprintf(output, "&(%s_parms::%s_isa<A, Ar>::instructions[%d])},\n", project_name, project_name, i + 1);
+      }
+      else {
+        fprintf(output, "&(%s_parms::%s_isa::instructions[%d])},\n", project_name, project_name, i + 1);
+      }
+    }
     else
       fprintf(output, "NULL}\n");
     for (pdeclist = pinstr->dec_list; pdeclist != NULL; pdeclist = pdeclist->next)
@@ -2886,9 +3740,17 @@ void CreateImplTmpl(){
   fprintf(output, "};\n\n");
 
   /* Creating instruction table */
-  fprintf(output, "const ac_instr_info\n");
-  fprintf(output, "%s_parms::%s_isa::instr_table[%s_parms::AC_DEC_INSTR_NUMBER + 1] = {\n",
-          project_name, project_name, project_name);
+  if (HaveADF) {
+    fprintf(output, "template <class A, class Ar>\n");
+    fprintf(output, "const ac_instr_info\n");
+    fprintf(output, "%s_parms::%s_isa<A, Ar>::instr_table[%s_parms::AC_DEC_INSTR_NUMBER + 1] = {\n",
+            project_name, project_name, project_name);
+  }
+  else {
+    fprintf(output, "const ac_instr_info\n");
+    fprintf(output, "%s_parms::%s_isa::instr_table[%s_parms::AC_DEC_INSTR_NUMBER + 1] = {\n",
+            project_name, project_name, project_name);
+  }
   fprintf(output, "%sac_instr_info(0, \"_ac_invalid_\", \"_ac_invalid_\", %d),\n",
           INDENT[1], wordsize / 8);
   for (pinstr = instr_list; pinstr != NULL; pinstr = pinstr->next) {
@@ -2904,8 +3766,15 @@ void CreateImplTmpl(){
   fprintf(output, "\n};\n\n");
 
   /* Creating instruction format table */
-  fprintf(output, "const unsigned %s_parms::%s_isa::instr_format_table[%s_parms::AC_DEC_INSTR_NUMBER + 1] = {\n",
-          project_name, project_name, project_name);
+  if (HaveADF) {
+    fprintf(output, "template <class A, class Ar>\n");
+    fprintf(output, "const unsigned %s_parms::%s_isa<A, Ar>::instr_format_table[%s_parms::AC_DEC_INSTR_NUMBER + 1] = {\n",
+            project_name, project_name, project_name);
+  }
+  else {
+    fprintf(output, "const unsigned %s_parms::%s_isa::instr_format_table[%s_parms::AC_DEC_INSTR_NUMBER + 1] = {\n",
+            project_name, project_name, project_name);
+  }
   fprintf(output, "%s0,\n", INDENT[1]);
   for (pinstr = instr_list; pinstr != NULL; pinstr = pinstr->next) {
     fprintf(output, "%s%d",
@@ -3027,7 +3896,8 @@ void CreateIntrTmpl() {
 //!Create ArchC model syscalls
 void CreateArchSyscallHeader()
 {
-  extern char *project_name;
+  extern char *project_name, *upper_project_name;
+  extern int HaveADF;
   FILE *output;
   char filename[50];
 
@@ -3044,16 +3914,20 @@ void CreateArchSyscallHeader()
           "#ifndef %s_SYSCALL_H\n"
           "#define %s_SYSCALL_H\n"
           "\n"
-          "#include \"%s_arch.H\"\n"
-          "#include \"%s_arch_ref.H\"\n"
-          "#include \"%s_parms.H\"\n"
-          "#include \"ac_syscall.H\"\n"
+          //"#include \"%s_arch.H\"\n"
+          //"#include \"%s_arch_ref.H\"\n"
+          //"#include \"%s_parms.H\"\n"
+          //"#include \"ac_syscall.H\"\n"
+          "#include \"%s_syscall_inc.H\"\n"
           "\n"
           "//%s system calls\n"
-          "class %s_syscall : public ac_syscall<%s_parms::ac_word, %s_parms::ac_Hword>, public %s_arch_ref\n"
+          //"class %s_syscall : public ac_syscall<%s_parms::ac_word, %s_parms::ac_Hword>, public %s_arch_ref\n"
+          "_AC_SYSCALL_CLASS_\n"
           "{\n"
           "public:\n"
-          "  %s_syscall(%s_arch& ref) : ac_syscall<%s_parms::ac_word, %s_parms::ac_Hword>(ref, %s_parms::AC_RAMSIZE), %s_arch_ref(ref) {};\n"
+          "  _AC_SYSCALL_ARCH_USING_\n"
+          //"  %s_syscall(%s_arch& ref) : ac_syscall<%s_parms::ac_word, %s_parms::ac_Hword>(ref, %s_parms::AC_RAMSIZE), %s_arch_ref(ref) {};\n"
+          "  _AC_SYSCALL_CTOR_ {};\n"
           "  virtual ~%s_syscall() {};\n\n"
           "  void get_buffer(int argn, unsigned char* buf, unsigned int size);\n"
           "  void set_buffer(int argn, unsigned char* buf, unsigned int size);\n"
@@ -3065,13 +3939,126 @@ void CreateArchSyscallHeader()
           "};\n"
           "\n"
           "#endif\n"
-          , project_name, project_name, project_name, project_name,
-          project_name, project_name, project_name, project_name,
-          project_name, project_name, project_name, project_name,
-          project_name, project_name, project_name, project_name,
-          project_name);
+          //, upper_project_name, upper_project_name, project_name, project_name,
+          //project_name, project_name, project_name, project_name,
+          //project_name, project_name, project_name, project_name,
+          //project_name, project_name, project_name, project_name,
+          //project_name);
+          , upper_project_name, upper_project_name, project_name, project_name, project_name);
 
   fclose( output);
+
+  snprintf(filename, 50, "%s_syscall_inc.H", project_name);
+
+  if ( !(output = fopen( filename, "w"))){
+    perror("ArchC could not open output file");
+    exit(1);
+  }
+
+  print_comment( output, "ArchC Architecture Dependent Syscall includes.");
+
+  fprintf( output, 
+        "#ifdef _%s_SYSCALL_CPP_\n"
+        "#ifndef _%s_SYSCALL_INC_H_CPP_\n"
+        "#define _%s_SYSCALL_INC_H_CPP_\n\n",
+        upper_project_name, upper_project_name, upper_project_name);
+
+  if (HaveADF) {
+    fprintf( output,
+          "#include \"%s_arch_ref.H\"\n"
+          "#include \"%s_varchc_arch_ref.H\"\n"
+          "#include \"%s_syscall.H\"\n\n",
+          project_name, project_name, project_name);
+
+
+    fprintf( output, "template class %s_syscall<%s_arch, %s_arch_ref>;\n"
+                     "template class %s_syscall<VArchC::Arch, VArchC::Arch_ref>;\n\n",
+                     project_name, project_name, project_name, project_name);
+  }
+  else {
+    fprintf( output,
+          "#include \"%s_syscall.H\"\n\n",
+          project_name);
+  }
+
+  if (HaveADF) {
+  fprintf( output,
+        "#define _AC_SYSCALL_IMPL_(return_type,method_name,...) template <class A, class Ar> return_type %s_syscall<A, Ar>::method_name(__VA_ARGS__)\n\n",
+        project_name);
+  }
+  else {
+  fprintf( output,
+        "#define _AC_SYSCALL_IMPL_(return_type,method_name,...) return_type %s_syscall::method_name(__VA_ARGS__)\n\n",
+        project_name);
+  }
+
+  fprintf(output, 
+          "\n\n"
+          "#endif\n"
+          "#endif\n\n");
+
+  fprintf(output,
+          "#ifdef %s_SYSCALL_H\n"
+          "#ifndef _%s_SYSCALL_INC_H_H_\n"
+          "#define _%s_SYSCALL_INC_H_H_\n\n",
+          upper_project_name, upper_project_name, upper_project_name);
+
+  if (HaveADF) {
+    fprintf( output,
+          "#include \"%s_parms.H\"\n"
+          "#include \"ac_syscall.H\"\n\n",
+          project_name);
+    
+    fprintf( output, 
+          "namespace VArchC {\n"
+          " class Arch;\n"
+          "}\n"
+          "class %s_arch;\n\n", project_name);
+  }
+  else {
+    fprintf( output,
+          "#include \"%s_arch.H\"\n"
+          "#include \"%s_arch_ref.H\"\n"
+          "#include \"%s_parms.H\"\n"
+          "#include \"ac_syscall.H\"\n\n",
+          project_name, project_name, project_name);
+  }
+
+  if (HaveADF) {
+    fprintf( output, 
+          "#define _AC_SYSCALL_CLASS_ template <class A, class Ar> class %s_syscall : public ac_syscall<%s_parms::ac_word, %s_parms::ac_Hword>, public Ar\n\n",
+          project_name, project_name, project_name);
+  }
+  else {
+    fprintf( output, 
+          "#define _AC_SYSCALL_CLASS_ class %s_syscall : public ac_syscall<%s_parms::ac_word, %s_parms::ac_Hword>, public %s_arch_ref\n\n",
+          project_name, project_name, project_name, project_name);
+  }
+
+  if (HaveADF) {
+    fprintf( output,
+          "#define _AC_SYSCALL_CTOR_ %s_syscall(A& ref) : ac_syscall<%s_parms::ac_word, %s_parms::ac_Hword>(reinterpret_cast<ac_arch<%s_parms::ac_word, %s_parms::ac_Hword>&>(ref), %s_parms::AC_RAMSIZE), Ar(ref)\n\n",
+          project_name, project_name, project_name, project_name, project_name, project_name);
+  }
+  else {
+    fprintf( output,
+          "#define _AC_SYSCALL_CTOR_ %s_syscall(%s_arch& ref) : ac_syscall<%s_parms::ac_word, %s_parms::ac_Hword>(ref, %s_parms::AC_RAMSIZE), %s_arch_ref(ref)\n\n",
+          project_name, project_name, project_name, project_name, project_name, project_name);
+  }
+
+  fprintf( output, "#define _AC_SYSCALL_ARCH_USING_ ");
+  if (HaveADF) {
+    EmitArchUsingDirectives(output, "Ar", 0, 1);
+  }
+
+  fprintf(output, "\n\n");
+
+
+  fprintf(output, 
+          "#endif\n"
+          "#endif\n");
+
+  fclose(output);
 }
 
 void CreateArchSyscallTmpl() {
@@ -3088,7 +4075,8 @@ void CreateArchSyscallTmpl() {
     }
 
     print_comment(output, description);
-    fprintf(output, "#include  \"%s_syscall.H\"\n", project_name);
+    fprintf(output, "#define _MIPS_SYSCALL_CPP_\n");
+    fprintf(output, "#include  \"%s_syscall_inc.H\"\n", project_name);
     fprintf(output, "\n");
 
     COMMENT(INDENT[0], "'using namespace' statement to allow access to all "
@@ -3096,23 +4084,33 @@ void CreateArchSyscallTmpl() {
             project_name);
     fprintf(output, "using namespace %s_parms;\n\n", project_name);
 
-    fprintf(output, "void %s_syscall::get_buffer(int argn, unsigned char* buf, "
-                    "unsigned int size) { }\n",
-            project_name);
-    fprintf(output, "void %s_syscall::set_buffer(int argn, unsigned char* buf, "
-                    "unsigned int size) { }\n",
-            project_name);
-    fprintf(output, "void %s_syscall::set_buffer_noinvert(int argn, unsigned "
-                    "char* buf, unsigned int size) { }\n",
-            project_name);
-    fprintf(output, "int  %s_syscall::get_int(int argn) { }\n", project_name);
-    fprintf(output, "void %s_syscall::set_int(int argn, int val) { }\n",
-            project_name);
-    fprintf(output, "void %s_syscall::return_from_syscall() { }\n",
-            project_name);
-    fprintf(output,
-            "void %s_syscall::set_prog_args(int argc, char **argv) { } \n",
-            project_name);
+    //fprintf(output, "void %s_syscall::get_buffer(int argn, unsigned char* buf, "
+    //                "unsigned int size) { }\n",
+    //        project_name);
+    //fprintf(output, "void %s_syscall::set_buffer(int argn, unsigned char* buf, "
+    //                "unsigned int size) { }\n",
+    //        project_name);
+    //fprintf(output, "void %s_syscall::set_buffer_noinvert(int argn, unsigned "
+    //                "char* buf, unsigned int size) { }\n",
+    //        project_name);
+    //fprintf(output, "int  %s_syscall::get_int(int argn) { }\n", project_name);
+    //fprintf(output, "void %s_syscall::set_int(int argn, int val) { }\n",
+    //        project_name);
+    //fprintf(output, "void %s_syscall::return_from_syscall() { }\n",
+    //        project_name);
+    //fprintf(output,
+    //        "void %s_syscall::set_prog_args(int argc, char **argv) { } \n",
+    //        project_name);
+    fprintf(output, "_AC_SYSCALL_IMPL_(void, get_buffer, int argn, unsigned char* buf, "
+                    "unsigned int size) { }\n");
+    fprintf(output, "_AC_SYSCALL_IMPL_(void, set_buffer, int argn, unsigned char* buf, "
+                    "unsigned int size) { }\n");
+    fprintf(output, "_AC_SYSCALL_IMPL_(void, set_buffer_noinvert, int argn, unsigned "
+                    "char* buf, unsigned int size) { }\n");
+    fprintf(output, "_AC_SYSCALL_IMPL_(int, get_int, int argn) { }\n");
+    fprintf(output, "_AC_SYSCALL_IMPL_(void, set_int, int argn, int val) { }\n");
+    fprintf(output, "_AC_SYSCALL_IMPL_(void, return_from_syscall) { }\n");
+    fprintf(output, "_AC_SYSCALL_IMPL_(void, set_prog_args, int argc, char **argv) { } \n");
 }
 
 ///Creates the header file for interrupt handlers.
@@ -3305,6 +4303,7 @@ void CreateMakefile(){
   extern int HaveTLM2NBPorts;
   extern int HaveTLMIntrPorts;
   extern int HaveTLM2IntrPorts;
+  extern int HaveADF;
 
   FILE *output;
   char filename[] = "Makefile";
@@ -3364,6 +4363,12 @@ void CreateMakefile(){
   //Declaring ACSRCS variable
   COMMENT_MAKE("These are the source files automatically generated by ArchC, that must appear in the SRCS variable");
   fprintf( output, "ACSRCS := $(TARGET)_arch.cpp $(TARGET)_arch_ref.cpp ");
+  if (HaveADF) {
+    fprintf( output, "$(TARGET)_varchc_arch.cpp $(TARGET)_varchc_arch_ref.cpp ");
+    fprintf( output, "$(TARGET)_varchc_control.cpp ");
+    fprintf( output, "$(TARGET)_varchc_wrappers.cpp ");
+    fprintf( output, "$(TARGET)_varchc.cpp ");
+  }
   fprintf( output, "$(TARGET).cpp\n\n");
 
   //Declaring ACINCS variable
@@ -3379,6 +4384,12 @@ void CreateMakefile(){
     fprintf( output, "%s_stats.H ", project_name);
   if(HaveTLMIntrPorts || HaveTLM2IntrPorts)
     fprintf( output,  " $(TARGET)_intr_handlers.H $(TARGET)_ih_bhv_macros.H ");
+  if( ACABIFlag ) {
+    fprintf( output,  " $(TARGET)_syscall_inc.H ");
+  }
+  if (HaveADF) {
+    fprintf(output, "$(TARGET)_varchc_arch.H $(TARGET)_varchc_arch_ref.H $(TARGET)_varchc_control.H $(TARGET)_varchc.H $(TARGET)_varchc_wrappers.H $(TARGET)_varchc_models.H $(TARGET)_iface.h ");
+  }
   fprintf( output, "$(TARGET).H\n\n");
 
   //if(HaveTLMIntrPorts)
@@ -3511,6 +4522,14 @@ void CreateMakefile(){
 
   fprintf( output, "$(TARGET).o: $(TARGET).cpp $(TARGET)_isa.cpp\n");
   fprintf( output, "\t$(CC) $(CFLAGS) $(INC_DIR) -c $<\n\n");
+
+  if (HaveADF) {
+    fprintf( output, "$(TARGET)_varchc.o: $(TARGET)_varchc.cpp $(TARGET)_isa.cpp\n");
+    fprintf( output, "\t$(CC) $(CFLAGS) $(INC_DIR) -c $<\n\n");
+
+    fprintf( output, "$(TARGET)_varchc_wrappers.o: $(TARGET)_varchc_wrappers.cpp $(TARGET)_isa.cpp $(TARGET)_varchc_models.cpp\n");
+    fprintf( output, "\t$(CC) $(CFLAGS) $(INC_DIR) -c $<\n\n");
+  }
 
   fprintf( output, ".cpp.o:\n");
   fprintf( output, "\t$(CC) $(CFLAGS) $(INC_DIR) -c $<\n\n");
@@ -3750,7 +4769,23 @@ void EmitInstrExecIni( FILE *output, int base_indent) {
 /*!  Emit code for executing instructions
   \brief Used by EmitProcessorBhv function */
 /***************************************/
-void EmitInstrExec( FILE *output, int base_indent){
+void EmitInstrBhvMethodCall(FILE *output, int base_indent, ac_dec_instr *pinstr, ac_dec_format *pformat) {
+  ac_dec_field *pfield;
+
+  fprintf(output, "%sISA.behavior_%s(", INDENT[base_indent + 1],
+      pinstr->name);
+  for (pfield = pformat->fields; pfield != NULL; pfield = pfield->next) {
+    if( ACDecCacheFlag )
+      fprintf(output, "instr_dec->F_%s.%s", pformat->name, pfield->name);
+    else
+      fprintf(output, "ins_cache[%d]", pfield->id);
+    if (pfield->next != NULL)
+      fprintf(output, ", ");
+  }
+  fprintf(output, ");\n");
+}
+
+void EmitInstrExec( FILE *output, int base_indent, int varchc_version){
     extern ac_dec_instr *instr_list;
     extern ac_dec_format *format_ins_list;
     extern char* project_name;
@@ -3851,17 +4886,12 @@ void EmitInstrExec( FILE *output, int base_indent){
         fprintf(output, ");\n");
 
         /* emits instruction behavior method call */
-        fprintf(output, "%sISA.behavior_%s(", INDENT[base_indent + 1],
-                pinstr->name);
-        for (pfield = pformat->fields; pfield != NULL; pfield = pfield->next) {
-            if( ACDecCacheFlag )
-                fprintf(output, "instr_dec->F_%s.%s", pformat->name, pfield->name);
-            else
-                fprintf(output, "ins_cache[%d]", pfield->id);
-            if (pfield->next != NULL)
-                fprintf(output, ", ");
+        if (varchc_version) {
+          EmitInstrBhvMethodCall_VArchC(output, base_indent, pinstr, pformat);
         }
-        fprintf(output, ");\n");
+        else {
+          EmitInstrBhvMethodCall(output, base_indent, pinstr, pformat);
+        }
 
         if( ACWaitFlag ) {
           if (pinstr->cycles <= 5)
@@ -3924,7 +4954,7 @@ void EmitFetchInit( FILE *output, int base_indent){
   a processor without pipeline and with single cycle instruction.
   \brief Used by CreateProcessorImpl function      */
 /***************************************/
-void EmitProcessorBhv( FILE *output, int base_indent ) {
+void EmitProcessorBhv( FILE *output, int base_indent, int varchc_version) {
   extern char* project_name;
 
   fprintf(output, "%sfor (;;) {\n\n", INDENT[base_indent]);
@@ -3999,7 +5029,7 @@ void EmitProcessorBhv( FILE *output, int base_indent ) {
   }
   else EmitDecodification(output, base_indent);
 
-  EmitInstrExec(output, base_indent);
+  EmitInstrExec(output, base_indent, varchc_version);
 
   if( ACABIFlag ) {
       base_indent--;
@@ -4316,6 +5346,7 @@ void EmitDecCacheAt(FILE *output, int base_indent) {
   \brief Used by CreateProcessorImpl function */
 /***************************************/
 void EmitDispatch(FILE *output, int base_indent) {
+  extern int HaveADF;
 
   fprintf( output, "%svoid* %s::dispatch() {\n",
            INDENT[base_indent], project_name);
@@ -4470,7 +5501,6 @@ void EmitDispatch(FILE *output, int base_indent) {
     fprintf(output, "#endif\n\n");
   }
 
-
   if(ACDecCacheFlag)
     fprintf( output, "%sreturn instr_dec->end_rot;\n", INDENT[base_indent]);
   else
@@ -4509,8 +5539,6 @@ void EmitVetLabelAt(FILE *output, int base_indent) {
 ////////////////////////////////////
 // Utility Functions              //
 ////////////////////////////////////
-
-#include <unistd.h>
 
 //!Read the archc.conf configuration file
 void ReadConfFile(){

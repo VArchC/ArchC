@@ -185,12 +185,12 @@ void print_comment( FILE* output, char* description);
  * .cpp files.
  * @{
  */
-void CreateArchHeader(void);                      //!< Creates the header file for ac_resources class.
-void CreateArchImpl(void);                        //!< Creates the .cpp file for _arch class.
-void CreateArchRefHeader(void);                   //!< Creates the header file for proj_arch_ref class.
-void CreateArchRefImpl(void);                     //!< Creates the .cpp file for proj_arch_ref class.
+void CreateArchHeader(int varch_version);                      //!< Creates the header file for ac_resources class.
+void CreateArchImpl(int varchc_version);                        //!< Creates the .cpp file for _arch class.
+void CreateArchRefHeader(int varchc_version);                   //!< Creates the header file for proj_arch_ref class.
+void CreateArchRefImpl(int varchc_version);                     //!< Creates the .cpp file for proj_arch_ref class.
 void CreateISAHeader(void);                       //!< Creates the header file for the AC_ISA derived class.
-void CreateProcessorHeader(void);                 //!< Creates the header file for the processor module.
+void CreateProcessorHeader(int varchc_version);                 //!< Creates the header file for the processor module.
 void CreateParmHeader(void);                      //!< Creates the header file for ArchC common parameters.
 void CreateRegsHeader(void);                      //!< Creates the header file for ArchC formatted registers.
 void CreateStatsHeaderTmpl(void);                 //!< Creates the header file for ArchC statistics collection class.
@@ -204,7 +204,7 @@ void CreateRegsImpl(void);                        //!< Creates the .cpp template
 void CreateImplTmpl(void);                        //!< Creates the .cpp template file for behavior description.
 void CreateIntrTmpl(void);                        //!< Creates the .cpp template file for interrupt handlers.
 void CreateMainTmpl(void);                        //!< Creates the .cpp template file for the main function.
-void CreateProcessorImpl(void);                   //!< Creates the .cpp file for processor module.
+void CreateProcessorImpl(int varchc_version);                   //!< Creates the .cpp file for processor module.
 
 
 void CreateIntrTLM2Header(void); /******/
@@ -217,8 +217,11 @@ void CreateIntrTLM2Tmpl(void); /*****/
  * @{
 */
 void EmitUpdateMethod( FILE *output, int base_indent );                            //!< Emit reg update method for non-pipelined architectures.
-void EmitProcessorBhv( FILE *output, int base_indent);                             //!< Emit processor behavior for a single-cycle processor.
-void EmitInstrExec(FILE *output, int base_indent);                                 //!< Emit code for executing an instruction behavior
+void EmitProcessorBhvMethod(FILE *output, const char* prefix, int varchc_version); //!< Emits the processor behavior method.
+void EmitInstrBhvMethodCall(FILE *output, int base_indent, ac_dec_instr *pinstr, ac_dec_format *pformat); //!< Emits the call to an instruction behavior in the processor behavior method.
+void EmitProcessorCtorBody(FILE* output, int indent);         //!< Emits the processor constructor.
+void EmitProcessorBhv( FILE *output, int base_indent, int varchc_version);                             //!< Emit processor behavior for a single-cycle processor.
+void EmitInstrExec(FILE *output, int base_indent, int varchc_version);                                 //!< Emit code for executing an instruction behavior
 void EmitDecodification(FILE *output, int base_indent);                            //!< Emit for instruction decodification
 void EmitFetchInit(FILE *output, int base_indent);                                 //!< Emit code used for initializing fetchs
 void EmitCacheDeclaration(FILE *output, ac_sto_list* pstorage, int base_indent);   //!< Emit code for ac_cache object declaration

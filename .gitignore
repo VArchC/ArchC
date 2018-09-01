@@ -44,7 +44,7 @@ acbingen.sh
 acrelconvert
 bmdsfg
 accsim
-acsim
+/src/acsim/acsim
 actsim
 config.cache
 env.sh
