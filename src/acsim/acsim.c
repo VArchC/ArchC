@@ -3478,29 +3478,29 @@ void CreateMakefile(){
   fprintf(output, "\tcp main.cpp.tmpl main.cpp\n\n");
 
   if (ACABIFlag) {
-      COMMENT_MAKE("Copy from template if %s_syscall.H not exist", project_name);
-      fprintf(output, "%s_syscall.H:\n", project_name);
-      fprintf(output, "\tcp %s_syscall.H.tmpl %s_syscall.H\n\n", project_name, project_name);
+      COMMENT_MAKE("Copy from template if $(TARGET)_syscall.H not exist");
+      fprintf(output, "$(TARGET)_syscall.H:\n");
+      fprintf(output, "\tcp $(TARGET)_syscall.H.tmpl $(TARGET)_syscall.H\n\n");
   }
 
   if (ACStatsFlag) {
-      COMMENT_MAKE("Copy from template if %s_stats.H not exist", project_name);
-      fprintf(output, "%s_stats.H:\n", project_name);
-      fprintf(output, "\tcp %s_stats.H.tmpl %s_stats.H\n\n", project_name, project_name);
+      COMMENT_MAKE("Copy from template if $(TARGET)_stats.H not exist");
+      fprintf(output, "$(TARGET)_stats.H:\n");
+      fprintf(output, "\tcp $(TARGET)_stats.H.tmpl $(TARGET)_stats.H\n\n");
 
-      COMMENT_MAKE("Copy from template if %s_stats.cpp not exist", project_name);
-      fprintf(output, "%s_stats.cpp:\n", project_name);
-      fprintf(output, "\tcp %s_stats.cpp.tmpl %s_stats.cpp\n\n", project_name, project_name);
+      COMMENT_MAKE("Copy from template if $(TARGET)_stats.cpp not exist");
+      fprintf(output, "$(TARGET)_stats.cpp:\n");
+      fprintf(output, "\tcp $(TARGET)_stats.cpp.tmpl $(TARGET)_stats.cpp\n\n");
   }
 
   if (HaveTLMIntrPorts || HaveTLM2IntrPorts) {
-      COMMENT_MAKE("Copy from template if %s_intr_handlers.cpp not exist", project_name);
-      fprintf( output, "%s_intr_handlers.cpp:\n", project_name);
-      fprintf( output, "\tcp %s_intr_handlers.cpp.tmpl %s_intr_handlers.cpp\n\n", project_name, project_name);
+      COMMENT_MAKE("Copy from template if $(TARGET)_intr_handlers.cpp not exist");
+      fprintf( output, "$(TARGET)_intr_handlers.cpp:\n");
+      fprintf( output, "\tcp $(TARGET)_intr_handlers.cpp.tmpl $(TARGET)_intr_handlers.cpp\n\n");
   }
 
   if (HaveTLMPorts || HaveTLMIntrPorts || HaveTLM2Ports || HaveTLM2NBPorts || HaveTLM2IntrPorts) {
-      fprintf( output, "lib: %s.cpp $(OBJS)\n", project_name);
+      fprintf( output, "lib: $(TARGET).cpp $(OBJS)\n");
       fprintf( output, "\tar r lib$(TARGET).a $(OBJS)\n\n");
 
 //      fprintf( output, "%s.cpp:\n", project_name);
