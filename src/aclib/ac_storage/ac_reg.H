@@ -49,10 +49,17 @@
 using std::string;
 using std::list;
 
+namespace VArchC {
+  namespace Storage {
+    template <typename T> class Reg;
+  }
+}
+
 ////////////////////////////////////////////////////
 //!ArchC class specialized for modeling registers.//
 ////////////////////////////////////////////////////
 template <typename T> class ac_reg {
+  friend class VArchC::Storage::Reg<T>;
 protected:
   T Data;
   string Name;

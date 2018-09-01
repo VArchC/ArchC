@@ -204,6 +204,7 @@ AC_CONFIG_FILES(
   src/aclib/ac_syscall/Makefile
   src/aclib/ac_tlm/Makefile
   src/aclib/ac_utils/Makefile
+  src/aclib/ac_varchc/Makefile
   src/acsim/Makefile
   src/actsim/Makefile
   src/accsim/Makefile

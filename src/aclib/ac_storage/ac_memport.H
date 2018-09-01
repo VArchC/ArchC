@@ -92,10 +92,16 @@ using std::ifstream;
 
 //////////////////////////////////////////////////////////////////////////////
 
+namespace VArchC {
+  namespace Storage {
+    template<typename ac_word, typename ac_Hword> class Memport;
+  }
+}
+
 /// Template wrapper class for memory access.
 template<typename ac_word, typename ac_Hword> class ac_memport :
   public ac_arch_ref<ac_word, ac_Hword> {
-
+friend class VArchC::Storage::Memport<ac_word, ac_Hword>;
 private:
 
   ac_inout_if* storage;
