@@ -128,6 +128,7 @@ ac_decoder_full *CreateDecoder(ac_dec_format *formats, ac_dec_instr *instruction
 
 ac_dec_format *FindFormat(ac_dec_format *formats, char *name);
 ac_dec_instr *GetInstrByID(ac_dec_instr *instr, int id);
+ac_dec_instr *GetInstrByMnemonic(ac_dec_instr *instr, char* mnemonic);
 unsigned *Decode(ac_decoder_full *decoder, unsigned char *buffer, int quant);
 
 #ifdef __cplusplus

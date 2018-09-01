@@ -510,3 +510,10 @@ ac_dec_instr *GetInstrByID(ac_dec_instr *instr, int id)
 }
 
 
+ac_dec_instr *GetInstrByMnemonic(ac_dec_instr *instr, char* mnemonic)
+{
+  for (; instr && strcmp(mnemonic, instr->mnemonic) != 0;) {
+    instr = instr->next;
+  }
+  return instr;
+}
