@@ -3509,6 +3509,9 @@ void CreateMakefile(){
 //      fprintf( output, "\t$(MAKE) lib\n\n");
   }
 
+  fprintf( output, "$(TARGET).o: $(TARGET).cpp $(TARGET)_isa.cpp\n");
+  fprintf( output, "\t$(CC) $(CFLAGS) $(INC_DIR) -c $<\n\n");
+
   fprintf( output, ".cpp.o:\n");
   fprintf( output, "\t$(CC) $(CFLAGS) $(INC_DIR) -c $<\n\n");
 
