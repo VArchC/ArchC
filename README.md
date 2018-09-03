@@ -20,14 +20,14 @@ Dependencies
 ------------
 
 1. GNU autotools:
-..- m4
-..- autoconf
-..- automake
-..- libtool
+  - m4
+  - autoconf
+  - automake
+  - libtool
 
 2. Build tools:
-..- GCC
-..- GNU Make
+  - GCC
+  - GNU Make
 
 3. GNU Bison
 
